@@ -92,7 +92,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
   # let's only import the things we need
   from analysis_transforms import invertible_linear
   if dict_update_alg == 'ica_natural_gradient':
-    from dictionary_learning import ica_natural_gradient
+    from dict_update_rules import ica_natural_gradient
   else:
     raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
 

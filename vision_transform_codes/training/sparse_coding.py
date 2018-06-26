@@ -112,9 +112,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     raise KeyError('Unrecognized code inference algorithm: ' + code_inf_alg)
 
   if dict_update_alg == 'sc_steepest_descent':
-    from dictionary_learning import sc_steepest_descent
+    from dict_update_rules import sc_steepest_descent
   elif dict_update_alg == 'sc_cheap_quadratic_descent':
-    from dictionary_learning import sc_cheap_quadratic_descent
+    from dict_update_rules import sc_cheap_quadratic_descent
     hessian_diag = init_dictionary.new_zeros(init_dictionary.size(1))
     #^ we'll compute a 'smoothed' version of this at every iteration
   else:
