@@ -172,11 +172,15 @@ def center_on_origin(flat_data):
 
   Returns
   -------
-  centered_data : ndarray(float32 size=(n, D))
+  centered_data : ndarray(float32, size=(n, D))
       The data, now with mean 0 in each component
+  original_means : ndarray(float32, size=(n,))
+      The componentwise means of the original data. Can be used to
+      uncenter the data later (for instance, after dictionary learning)
   """
   assert flat_data.dtype in ['float32', 'uint8']
-  return (flat_data - np.mean(flat_data, axis=1)[:, None]).astype('float32')
+  original_means = np.mean(flat_data, axis=1)
+  return (flat_data - original_means[:, None]).astype('float32'), original_means
 
 
 def normalize_variance(flat_data):
@@ -193,9 +197,14 @@ def normalize_variance(flat_data):
   -------
   normalized_data : ndarray(float32 size=(n, D))
       The data, now with variance
+  original_variances : ndarray(float32, size=(n,))
+      The componentwise variances of the original data. Can be used to
+      unnormalize the data later (for instance, after dictionary learning)
   """
   assert flat_data.dtype in ['float32', 'uint8']
-  return (flat_data / np.std(flat_data, axis=1)[:, None]).astype('float32')
+  original_variances = np.var(flat_data, axis=1)
+  return ((flat_data / np.sqrt(original_variances)[:, None]).astype('float32'),
+          original_variances)
 
 
 def patches_from_single_image(image, patch_dimensions):
@@ -311,10 +320,19 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
 
   Returns
   -------
-  batched_patches : ndarray(float32, size=(k, n, b))
-      The patches training set where k=num_batches,
-      n=patch_dimensions[0]*patch_dimensions[1], and b=batch_size. These are
-      patches ready to be sent to the gpu and consumed in PyTorch
+  return_dict : dictionary
+    'batched_patches' : ndarray(float32, size=(k, n, b))
+        The patches training set where k=num_batches,
+        n=patch_dimensions[0]*patch_dimensions[1], and b=batch_size. These are
+        patches ready to be sent to the gpu and consumed in PyTorch
+    'orignal_patch_means' : ndarray(float32, size=(n,)), optional
+        If 'centering' was requested as a preprocessing step we return the
+        original patch means so that future data can be processed using this
+        same exact centering
+    'orignal_patch_variances' : ndarray(float32, size=(n,)), optional
+        If 'normalize_variance' was requested as a preprocessing step we return
+        the original patch variances so that future data can be processed using
+        this same exact normalization
   """
   if dataset == 'Field_NW_whitened':
     unprocessed_images = scipy.io.loadmat(
@@ -364,17 +382,23 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
     elif preproc_op == 'center':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before trying to center it')
-      all_patches = center_on_origin(all_patches)
+      all_patches, orig_means = center_on_origin(all_patches)
 
     elif preproc_op == 'normalize_variance':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before normalizing it')
-      all_patches = normalize_variance(all_patches)
+      all_patches, orig_variances = normalize_variance(all_patches)
 
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)
 
-  # now we finally chunk this up into batches
-  return all_patches.T.reshape(
-      (num_batches, batch_size, -1)).transpose((0, 2, 1))
-  #^ size=(k, n, b)
+  # now we finally chunk this up into batches and return
+  return_dict = {'batched_patches': all_patches.T.reshape(
+                    (num_batches, batch_size, -1)).transpose((0, 2, 1))}
+                 #^ size=(k, n, b)
+  if 'center' in order_of_preproc_ops:
+    return_dict['original_patch_means'] = orig_means
+  if 'normalize_variance' in order_of_preproc_ops:
+    return_dict['original_patch_variances'] = orig_variances
+
+  return return_dict
