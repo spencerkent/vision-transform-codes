@@ -4,7 +4,10 @@ Some simple utilities for plotting our transform codes
 
 import bisect
 import numpy as np
+from scipy.stats import kurtosis
 from matplotlib import pyplot as plt
+import matplotlib.gridspec as gridspec
+from matplotlib.ticker import FormatStrFormatter
 
 class TrainingLivePlot(object):
   """
@@ -209,6 +212,76 @@ def display_dictionary(dictionary, image_height, image_width,
                vmax=max_plot_val, interpolation='nearest')
     plt.axis('off')
 
+    de_figs.append(fig)
+
+  return de_figs
+
+
+def histogram_code_values(codes, num_hist_bins, plot_title=""):
+  """
+  Histogram the coefficients of a code over some dataset
+  """
+
+  max_de_per_fig = 400
+  #^ maximum 400 {d}ictionary {e}lements codes displayed each fig
+  assert np.sqrt(max_de_per_fig) % 1 == 0, 'please pick a square number'
+  num_de = codes.shape[0]
+  num_de_figs = int(np.ceil(num_de / max_de_per_fig))
+  # this determines how many dictionary elements are aranged in a square
+  # grid within any given figure
+  if num_de_figs > 1:
+    de_per_fig = max_de_per_fig
+  else:
+    squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_fig))+1)]
+    de_per_fig = squares[bisect.bisect_left(squares, num_de)]
+  plot_sidelength = int(np.sqrt(de_per_fig))
+
+
+  de_idx = 0
+  de_figs = []
+  for in_de_fig_idx in range(num_de_figs):
+    fig = plt.figure(figsize=(15, 15))
+    fig.suptitle(plot_title + ', fig {} of {}'.format(
+                 in_de_fig_idx+1, num_de_figs), fontsize=15)
+    subplot_grid = gridspec.GridSpec(plot_sidelength, plot_sidelength,
+                                     wspace=0.35, hspace=0.35)
+
+    fig_de_idx = de_idx % de_per_fig
+    while fig_de_idx < de_per_fig and de_idx < num_de:
+      if de_idx % 100 == 0:
+        print('plotted', de_idx, 'of', num_de, 'code coefficients')
+      ax = plt.Subplot(fig, subplot_grid[fig_de_idx])
+      counts, hist_bin_edges = np.histogram(codes[de_idx, :], num_hist_bins)
+      empirical_density = counts / np.sum(counts)
+      hist_bin_centers = (hist_bin_edges[:-1] + hist_bin_edges[1:]) / 2
+      min_bin = hist_bin_centers[0]
+      max_bin = hist_bin_centers[-1]
+      max_density = np.max(empirical_density)
+      variance = np.var(codes[de_idx, :])
+      hist_kurtosis = kurtosis(empirical_density, fisher=False)
+
+      ax.bar(hist_bin_centers, empirical_density, align='center',
+             color='k', width=hist_bin_centers[1]-hist_bin_centers[0])
+
+      ax.yaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
+      ax.xaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
+      ax.tick_params(axis='both', which='major',
+                     labelsize=5)
+      ax.set_xticks([min_bin, 0., max_bin])
+      ax.set_yticks([0., max_density])
+      ax.spines['right'].set_visible(False)
+      ax.spines['top'].set_visible(False)
+
+      ax.text(0.1, 0.97, '{:.2f}'.format(variance), horizontalalignment='left',
+              verticalalignment='top', transform=ax.transAxes, color='b',
+              fontsize=5)
+      ax.text(0.1, 0.8, '{:.2f}'.format(hist_kurtosis),
+              horizontalalignment='left', verticalalignment='top',
+              transform=ax.transAxes, color='r', fontsize=5)
+
+      fig.add_subplot(ax)
+      fig_de_idx += 1
+      de_idx += 1
     de_figs.append(fig)
 
   return de_figs
