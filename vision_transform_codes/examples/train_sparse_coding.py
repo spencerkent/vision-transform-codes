@@ -44,11 +44,15 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 one_mil_image_patches = create_patch_training_set(
-    ['whiten_center_surround', 'patch'], (PATCH_HEIGHT, PATCH_WIDTH),
+    ['patch'], (PATCH_HEIGHT, PATCH_WIDTH),
     BATCH_SIZE, NUM_BATCHES, edge_buffer=5, dataset='Field_NW_unwhitened',
-    datasetparams={'exclude': []})
+    datasetparams={'exclude': []})['batched_patches']
 
-pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'wb'))
+#################################################################
+# save these to disk if you want always train on the same patches
+# or if you want to speed things up in the future
+#################################################################
+# pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'wb'))
 
 # one_mil_image_patches = pickle.load(open(
 #     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'rb')).astype('float32')
@@ -65,7 +69,8 @@ sparse_coding_dictionary.div_(sparse_coding_dictionary.norm(p=2, dim=0))
 liveplot_obj = TrainingLivePlot(
     dict_plot_params={'total_num': CODE_SIZE, 'img_height': PATCH_HEIGHT,
                       'img_width': PATCH_WIDTH, 'plot_width': 16,
-                      'plot_height': 16, 'renorm imgs': True},
+                      'plot_height': 16, 'renorm imgs': True,
+                      'display_ordered': True},
     code_plot_params={'size': CODE_SIZE})
 
 SC_PARAMS['training_visualization_schedule']['liveplot_object_reference'] = liveplot_obj
