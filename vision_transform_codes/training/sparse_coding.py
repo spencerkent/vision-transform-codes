@@ -37,7 +37,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         The number of times to cycle over the whole dataset, reshuffling the
         order of the patches.
       'code_inference_algorithm' : str
-        One of {'ista'}
+        One of {'ista', 'fista'}
       'dictionary_update_algorithm' : str
         One of {'sc_steepest_descent', 'sc_cheap_quadratic_descent'}
       'inference_param_schedule' : dictionary
@@ -77,7 +77,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
   inf_param_schedule = all_params['inference_param_schedule']
   dict_update_alg = all_params['dictionary_update_algorithm']
   dict_update_param_schedule = all_params['dict_update_param_schedule']
-  assert code_inf_alg in ['ista']
+  assert code_inf_alg in ['ista', 'fista']
   assert dict_update_alg in ['sc_steepest_descent',
                              'sc_cheap_quadratic_descent']
   ### OPTIONAL ###
@@ -108,6 +108,8 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
   # let's only import the things we need
   if code_inf_alg == 'ista':
     from analysis_transforms import ista
+  elif code_inf_alg == 'fista':
+    from analysis_transforms import fista
   else:
     raise KeyError('Unrecognized code inference algorithm: ' + code_inf_alg)
 
@@ -152,6 +154,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       if code_inf_alg == 'ista':
         codes = ista.run(batch_images, dictionary, sparsity_weight,
                          inf_max_num_iters, nonnegative_only=nonneg_only)
+      elif code_inf_alg == 'fista':
+        codes = fista.run(batch_images, dictionary, sparsity_weight,
+                          inf_max_num_iters, nonnegative_only=nonneg_only)
 
       # check to see if we need to checkpoint the model or plot something
       if (ckpt_sched is not None and total_iter_idx in ckpt_sched):

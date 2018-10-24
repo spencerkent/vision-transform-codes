@@ -25,18 +25,22 @@ NUM_EPOCHS = 30
 
 SC_PARAMS = {
     'num_epochs': NUM_EPOCHS,
-    'code_inference_algorithm': 'ista',
+    'code_inference_algorithm': 'fista',
     'inference_param_schedule': {
-      0: {'sparsity_weight': 0.1, 'max_num_iters': 1000}},
+      0: {'sparsity_weight': 0.1, 'max_num_iters': 50},
+      10*NUM_BATCHES: {'sparsity_weight': 0.1, 'max_num_iters': 100},
+      20*NUM_BATCHES: {'sparsity_weight': 0.1, 'max_num_iters': 200}},
     'dictionary_update_algorithm': 'sc_cheap_quadratic_descent',
     'dict_update_param_schedule': {
-      0: {'stepsize': 0.005, 'num_iters': 1}},
+      0: {'stepsize': 0.05, 'num_iters': 1},
+      10*NUM_BATCHES: {'stepsize': 0.01, 'num_iters': 1},
+      20*NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1}},
     'checkpoint_schedule': {
       'checkpoint_folder_fullpath': '/media/expansion1/spencerkent/logfiles/vision_transform_codes/' + RUN_IDENTIFIER,
       NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None},
-    'training_visualization_schedule': {
-      0: None, 1000: None, 2000: None, 4000: None, 6000: None, 10000: None,
-      20*NUM_BATCHES: None, 29*NUM_BATCHES: None}}
+    'training_visualization_schedule': {0: None, 1000: None, 2000: None}}
+SC_PARAMS['training_visualization_schedule'].update(
+    {NUM_BATCHES*x: None for x in range(NUM_EPOCHS)})
 
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)

@@ -21,21 +21,22 @@ PATCH_HEIGHT = 16
 PATCH_WIDTH = 16
 
 CODE_SIZE = PATCH_HEIGHT * PATCH_WIDTH
-NUM_EPOCHS = 30
+NUM_EPOCHS = 10
 
 ICA_PARAMS = {
     'num_epochs': NUM_EPOCHS,
     'dictionary_update_algorithm': 'ica_natural_gradient',
     'dict_update_param_schedule': {
       0: {'stepsize': 0.01, 'num_iters': 1},
-      5 * NUM_BATCHES: {'stepsize': 0.0005, 'num_iters': 1},
-      15 * NUM_BATCHES: {'stepsize': 0.0001, 'num_iters': 1}},
+      2 * NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1},
+      5 * NUM_BATCHES: {'stepsize': 0.0025, 'num_iters': 1},
+      7 * NUM_BATCHES: {'stepsize': 0.001, 'num_iters': 1}},
     'checkpoint_schedule': {
       'checkpoint_folder_fullpath': '/media/expansion1/spencerkent/logfiles/vision_transform_codes/' + RUN_IDENTIFIER,
       NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None},
-    'training_visualization_schedule': {
-      0: None, 1000: None, 2000: None, 4000: None, 6000: None, 10000: None,
-      20*NUM_BATCHES: None, 29*NUM_BATCHES: None}}
+    'training_visualization_schedule': {0: None, 1000: None, 2000: None}}
+ICA_PARAMS['training_visualization_schedule'].update(
+    {NUM_BATCHES*x: None for x in range(NUM_EPOCHS)})
 
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)
