@@ -82,9 +82,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
                              'sc_cheap_quadratic_descent']
   ### OPTIONAL ###
   if 'nonnegative_only' in all_params:
-    nonnegative_only = all_params['nonnegative_only']
+    nonneg_only = all_params['nonnegative_only']
   else:
-    nonnegative_only = False
+    nonneg_only = False
   if 'checkpoint_schedule' in all_params:
     ckpt_sched = all_params['checkpoint_schedule']
     ckpt_path = ckpt_sched.pop('checkpoint_folder_fullpath')
@@ -147,11 +147,11 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       # check to see if we need to set/update inference parameters
       if total_iter_idx in inf_param_schedule:
         sparsity_weight = inf_param_schedule[total_iter_idx]['sparsity_weight']
-        inf_num_iters = inf_param_schedule[total_iter_idx]['num_iters']
+        inf_max_num_iters = inf_param_schedule[total_iter_idx]['max_num_iters']
 
       if code_inf_alg == 'ista':
         codes = ista.run(batch_images, dictionary, sparsity_weight,
-                         inf_num_iters, nonnegative_only)
+                         inf_max_num_iters, nonnegative_only=nonneg_only)
 
       # check to see if we need to checkpoint the model or plot something
       if (ckpt_sched is not None and total_iter_idx in ckpt_sched):

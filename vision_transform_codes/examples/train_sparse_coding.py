@@ -27,7 +27,7 @@ SC_PARAMS = {
     'num_epochs': NUM_EPOCHS,
     'code_inference_algorithm': 'ista',
     'inference_param_schedule': {
-      0: {'sparsity_weight': 0.1, 'num_iters': 1000}},
+      0: {'sparsity_weight': 0.1, 'max_num_iters': 1000}},
     'dictionary_update_algorithm': 'sc_cheap_quadratic_descent',
     'dict_update_param_schedule': {
       0: {'stepsize': 0.005, 'num_iters': 1}},
@@ -52,10 +52,10 @@ one_mil_image_patches = create_patch_training_set(
 # save these to disk if you want always train on the same patches
 # or if you want to speed things up in the future
 #################################################################
-# pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'wb'))
+# pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_October24.p', 'wb'))
 
 # one_mil_image_patches = pickle.load(open(
-#     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'rb')).astype('float32')
+#     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_October24.p', 'rb')).astype('float32')
 
 # send ALL image patches to the GPU
 image_patches_gpu = torch.from_numpy(one_mil_image_patches).to(torch_device)

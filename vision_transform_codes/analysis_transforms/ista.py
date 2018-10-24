@@ -1,11 +1,16 @@
 """
-Implementations of Iterative Soft Thresholding
+Implementation of Iterative Soft Thresholding
 """
 import torch
 
-def run(images, dictionary, sparsity_weight, num_iters, nonnegative_only=False):
+def run(images, dictionary, sparsity_weight, max_num_iters,
+        convergence_epsilon=1e-5, nonnegative_only=False):
   """
-  Runs num_iters steps of Iterative Soft Thresholding
+  Runs steps of Iterative Soft Thresholding
+
+  Termination is at the sooner of 1) code changes by less then
+  convergence_epsilon, (per component, on average) or 2) max_num_iters have
+  been taken.
 
   Parameters
   ----------
@@ -19,8 +24,11 @@ def run(images, dictionary, sparsity_weight, num_iters, nonnegative_only=False):
   sparsity_weight : torch.Tensor(float32)
       This is the weight on the sparsity cost term in the sparse coding cost
       function. It is often denoted as \lambda
-  num_iters : int
-      Number of steps of ISTA to run
+  max_num_iters : int
+      Maximum number of steps of ISTA to run
+  convergence_epsilon : float, optional
+      Terminate if code changes by less than this amount per component.
+      Default 1e-5.
   nonnegative_only : bool, optional
       If true, our code values can only be nonnegative. We just chop off the
       left half of the ISTA soft thresholding function and it becomes a
@@ -41,11 +49,17 @@ def run(images, dictionary, sparsity_weight, num_iters, nonnegative_only=False):
   stepsize = 1. / lipschitz_constant
 
   codes = images.new_zeros(dictionary.size(1), images.size(1))
-  for iter_idx in range(num_iters):
+  old_codes = codes.clone()
+  avg_per_component_change = torch.mean(torch.abs(codes - old_codes))
+
+  iter_idx = 0
+  while (iter_idx < max_num_iters and
+         (avg_per_component_change > convergence_epsilon or iter_idx == 0)):
+    old_codes = codes.clone()
     # gradient of l2 term is <dictionary^T, (<dictionary, codes> - images)>
     codes.sub_(stepsize * torch.mm(dictionary.t(),
                                    torch.mm(dictionary, codes) - images))
-    #^ pre-threshold values s - lambda*A^T(As - x)
+    #^ pre-threshold values x - lambda*A^T(Ax - y)
     if nonnegative_only:
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       #^ shifted rectified linear activation
@@ -55,4 +69,9 @@ def run(images, dictionary, sparsity_weight, num_iters, nonnegative_only=False):
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       codes.mul_(pre_threshold_sign)
       #^ now contains the "soft thresholded" (non-rectified) output
+
+    avg_per_component_change = torch.mean(torch.abs(codes - old_codes))
+    # print(avg_per_component_change)
+    iter_idx += 1
+
   return codes
