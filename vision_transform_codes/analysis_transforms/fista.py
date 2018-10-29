@@ -4,13 +4,13 @@ Implementation of Fast Iterative Soft Thresholding (Accelerated proximal grad)
 import torch
 
 def run(images, dictionary, sparsity_weight, max_num_iters,
-        convergence_epsilon=1e-5, nonnegative_only=False):
+        convergence_epsilon=1e-3, nonnegative_only=False):
   """
   Runs steps of Fast Iterative Soft Thresholding, with fixed stepsize
 
   Termination is at the sooner of 1) code changes by less then
-  convergence_epsilon, (per component, on average) or 2) max_num_iters have
-  been taken.
+  convergence_epsilon, (per component, normalized by stepsize, on average)
+  or 2) max_num_iters have been taken.
 
   Parameters
   ----------
@@ -27,8 +27,8 @@ def run(images, dictionary, sparsity_weight, max_num_iters,
   max_num_iters : int
       Maximum number of steps of ISTA to run
   convergence_epsilon : float, optional
-      Terminate if code changes by less than this amount per component.
-      Default 1e-5.
+      Terminate if code changes by less than this amount per component,
+      normalized by stepsize. Default 1e-3.
   nonnegative_only : bool, optional
       If true, our code values can only be nonnegative. We just chop off the
       left half of the FISTA soft thresholding function and it becomes a
@@ -85,8 +85,7 @@ def run(images, dictionary, sparsity_weight, max_num_iters,
 
     aux_points = codes + beta_kplusone*(change_in_codes)
 
-    avg_per_component_change = torch.mean(torch.abs(change_in_codes))
-    # print(avg_per_component_change)
+    avg_per_component_change = torch.mean(torch.abs(change_in_codes) / stepsize)
     iter_idx += 1
 
   return codes
