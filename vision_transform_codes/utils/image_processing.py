@@ -2,14 +2,12 @@
 Some utilities for wrangling image data
 """
 
+import pickle
 import numpy as np
 import scipy.io
+import h5py
 
 from matplotlib import pyplot as plt
-
-FIELD_NW_WHITENED_FILEPATH = '/media/expansion1/spencerkent/Datasets/Field_natural_images/whitened.mat'
-FIELD_NW_UNWHITENED_FILEPATH = '/media/expansion1/spencerkent/Datasets/Field_natural_images/unwhitened.mat'
-
 
 def get_low_pass_filter(DFT_num_samples, filter_parameters):
   """
@@ -297,7 +295,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
   order_of_preproc_ops : list(str)
       Specifies the preprocessing operations to perform on the data. Currently
       available operations are {'patch', 'center', 'normalize_variance',
-      'whiten_center_surround'}.
+      'whiten_center_surround', 'shift_by_constant'}.
       Example: (we want to perform Bruno's whitening in the fourier domain and
                 also have the components of each patch have zero mean)
           ['whiten_center_surround', 'patch', 'zero_mean']
@@ -312,11 +310,14 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       patches.
   dataset : str
       The name of the dataset to grab patches from. Currently one of
-      {'Field_NW_unwhitened', 'Field_NW_whitened'}.
+      {'Field_NW_unwhitened', 'Field_NW_whitened', 'vanHateren', 'Kodak'}.
   datasetparams : dictionary
       A dictionary of parameters that may be specific to the dataset. Currently
-      just specifies which images to exclude from the training set.
-      'exclude': list(int)
+      just specifies the filepath of the data file and which images to
+      exclude from the training set.
+      'filepath' : str
+      'exclude' : list(int)
+      'shift_constant': float (only checked if shift_by_constant preproc)
 
   Returns
   -------
@@ -334,30 +335,57 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
         the original patch variances so that future data can be processed using
         this same exact normalization
   """
+  # our convention is that the first axis indexes images
   if dataset == 'Field_NW_whitened':
+    # data is stored as a .mat file
     unprocessed_images = scipy.io.loadmat(
-      FIELD_NW_WHITENED_FILEPATH)['IMAGES'].astype('float32')
+      datasetparams['filepath'])['IMAGES'].astype('float32')
+    temp = np.transpose(unprocessed_images, (2, 0, 1))
+    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
   elif dataset == 'Field_NW_unwhitened':
     unprocessed_images = scipy.io.loadmat(
-      FIELD_NW_UNWHITENED_FILEPATH)['IMAGESr'].astype('float32')
+      datasetparams['filepath'])['IMAGESr'].astype('float32')
+    temp = np.transpose(unprocessed_images, (2, 0, 1))
+    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
+  elif dataset == 'vanHateren':
+    # this dataset is MUCH larger so it will take some time to load into memory
+    with h5py.File(datasetparams['filepath']) as file_handle:
+      temp = np.array(file_handle['van_hateren_good'],
+                                    dtype='float32')
+    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
+    #^ maximum pixel value is 1.0, but minimum value is NOT 0.0, more like 0.4
+  elif dataset == 'Kodak':
+    unprocessed_images = pickle.load(open(datasetparams['filepath'], 'rb'))
+    # this is a list of images, so that each image can be EITHER
+    # 752x496 or 496x752, whichever makes it upright
+    unprocessed_images = [x.astype('float32') for x in unprocessed_images]
+    #^ these should be float32 for further processing...
   else:
     raise KeyError('Unrecognized dataset ' + dataset)
+  eligible_image_inds = np.array([x for x in range(len(unprocessed_images))
+                                  if x not in datasetparams['exclude']])
 
+  p_imgs = [unprocessed_images[x] for x in eligible_image_inds]
   already_patched_flag = False
-  p_imgs = np.copy(unprocessed_images)
   for preproc_op in order_of_preproc_ops:
 
     if preproc_op == 'whiten_center_surround':
-      for img_idx in range(p_imgs.shape[2]):
-        p_imgs[:, :, img_idx] = whiten_center_surround(p_imgs[:, :, img_idx])
+      for img_idx in range(len(p_imgs)):
+        p_imgs[img_idx] = whiten_center_surround(p_imgs[img_idx])
 
     elif preproc_op == 'patch':
-      max_vert_pos = p_imgs.shape[0] - patch_dimensions[0] - edge_buffer
-      min_vert_pos = edge_buffer
-      max_horz_pos = p_imgs.shape[1] - patch_dimensions[1] - edge_buffer
-      min_horz_pos = edge_buffer
-      eligible_image_inds = np.array([x for x in range(p_imgs.shape[2]) if
-                                      x not in datasetparams['exclude']])
+      max_vert_pos = []
+      min_vert_pos = []
+      max_horz_pos = []
+      min_horz_pos = []
+      for img_idx in range(len(p_imgs)):
+        max_vert_pos.append(
+            p_imgs[img_idx].shape[0] - patch_dimensions[0] - edge_buffer)
+        min_vert_pos.append(edge_buffer)
+        max_horz_pos.append(
+            p_imgs[img_idx].shape[1] - patch_dimensions[1] - edge_buffer)
+        min_horz_pos.append(edge_buffer)
+      num_imgs = len(p_imgs)
 
       all_patches = np.zeros(
         [patch_dimensions[0]*patch_dimensions[1], num_batches*batch_size],
@@ -365,19 +393,24 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
 
       p_idx = 0
       for batch_idx in range(num_batches):
-        if batch_idx % 1000 == 0:
-          print('Finished creating', batch_idx, 'batches')
         for _ in range(batch_size):
-          vert_pos = np.random.randint(low=min_vert_pos, high=max_vert_pos)
-          horz_pos = np.random.randint(low=min_horz_pos, high=max_horz_pos)
-          img_idx = np.random.choice(eligible_image_inds)
-          all_patches[:, p_idx] = p_imgs[
+          img_idx = np.random.randint(low=0, high=num_imgs)
+          vert_pos = np.random.randint(low=min_vert_pos[img_idx],
+                                       high=max_vert_pos[img_idx])
+          horz_pos = np.random.randint(low=min_horz_pos[img_idx],
+                                       high=max_horz_pos[img_idx])
+          all_patches[:, p_idx] = p_imgs[img_idx][
             vert_pos:vert_pos+patch_dimensions[0],
-            horz_pos:horz_pos+patch_dimensions[1],
-            img_idx].reshape([patch_dimensions[0]*patch_dimensions[1]])
+            horz_pos:horz_pos+patch_dimensions[1]].reshape(
+                [patch_dimensions[0]*patch_dimensions[1]])
           p_idx += 1
+        if batch_idx % 1000 == 0 and batch_idx != 0:
+          print('Finished creating', batch_idx, 'batches')
       print('Done.')
       already_patched_flag = True
+
+    elif preproc_op == 'shift_by_constant':
+      all_patches = all_patches + datasetparams['shift_constant']
 
     elif preproc_op == 'center':
       if not already_patched_flag:
