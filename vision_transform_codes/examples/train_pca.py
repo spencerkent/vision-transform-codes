@@ -1,9 +1,13 @@
 """
-Train a PCA dictionary on the Field natural images dataset
+Train an PCA dictionary
 """
 import sys
-sys.path.insert(0, '/home/spencerkent/Projects/vision-transform-codes/vision_transform_codes/')
+import os
+examples_fullpath = os.path.dirname(os.path.abspath(__file__))
+toplevel_dir_fullpath = examples_fullpath[:examples_fullpath.rfind('/')+1]
+sys.path.insert(0, toplevel_dir_fullpath)
 
+import argparse
 import pickle
 import numpy as np
 from matplotlib import pyplot as plt
@@ -23,6 +27,14 @@ PATCH_WIDTH = 16
 
 CODE_SIZE = PATCH_HEIGHT * PATCH_WIDTH
 
+# Arguments for dataset and logging
+parser = argparse.ArgumentParser()
+parser.add_argument("data_id",
+    help="Name of the dataset (currently allowable: " +
+         "Field_NW_whitened, Field_NW_unwhitened, vanHateren)")
+parser.add_argument("data_filepath", help="The full path to dataset on disk")
+script_args = parser.parse_args()
+
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)
 # otherwise can put on 'cuda:0' or 'cpu'
@@ -30,8 +42,9 @@ torch.cuda.set_device(1)
 # manually create large training set with one million whitened patches
 one_mil_image_patches = create_patch_training_set(
     ['patch', 'center'], (PATCH_HEIGHT, PATCH_WIDTH),
-    NUM_IMAGES_TRAIN, 1, edge_buffer=5, dataset='Field_NW_unwhitened',
-    datasetparams={'exclude': []})['batched_patches']
+    NUM_IMAGES_TRAIN, 1, edge_buffer=5, dataset=script_args.data_id,
+    datasetparams={'filepath': script_args.data_filepath,
+                   'exclude': []})['batched_patches']
 
 #################################################################
 # save these to disk if you want always train on the same patches
@@ -52,5 +65,7 @@ pca_dictionary = pca_train(image_patches_gpu)
 codes = invertible_linear.run(image_patches_gpu, pca_dictionary, orthonormal=True)
 
 plots = display_dictionary(pca_dictionary.cpu().numpy(),
-                           16, 16, 'PCA-determined basis functions')
+    (16, 16), 'PCA-determined basis functions, w/o renormalization',
+    renormalize=False)
+
 plt.show()

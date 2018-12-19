@@ -1,9 +1,13 @@
 """
-Train a sparse coding dictionary on the Field natural images dataset
+Train a sparse coding dictionary. These settings for Field natural images dset
 """
 import sys
-sys.path.insert(0, '/home/spencerkent/Projects/vision-transform-codes/vision_transform_codes/')
+import os
+examples_fullpath = os.path.dirname(os.path.abspath(__file__))
+toplevel_dir_fullpath = examples_fullpath[:examples_fullpath.rfind('/')+1]
+sys.path.insert(0, toplevel_dir_fullpath)
 
+import argparse
 import pickle
 import numpy as np
 from matplotlib import pyplot as plt
@@ -17,10 +21,10 @@ RUN_IDENTIFIER = 'test_sparse_coding'
 
 BATCH_SIZE = 250
 NUM_BATCHES = 4000  # 1 million patches total
-PATCH_HEIGHT = 16
-PATCH_WIDTH = 16
+PATCH_HEIGHT = 8
+PATCH_WIDTH = 8
 
-CODE_SIZE = 256
+CODE_SIZE = 64
 NUM_EPOCHS = 30
 
 SC_PARAMS = {
@@ -35,12 +39,24 @@ SC_PARAMS = {
       0: {'stepsize': 0.05, 'num_iters': 1},
       10*NUM_BATCHES: {'stepsize': 0.01, 'num_iters': 1},
       20*NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1}},
-    'checkpoint_schedule': {
-      'checkpoint_folder_fullpath': '/media/expansion1/spencerkent/logfiles/vision_transform_codes/' + RUN_IDENTIFIER,
-      NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None},
     'training_visualization_schedule': {0: None, 1000: None, 2000: None}}
 SC_PARAMS['training_visualization_schedule'].update(
     {NUM_BATCHES*x: None for x in range(NUM_EPOCHS)})
+
+# Arguments for dataset and logging
+parser = argparse.ArgumentParser()
+parser.add_argument("data_id",
+    help="Name of the dataset (currently allowable: " +
+         "Field_NW_whitened, Field_NW_unwhitened, vanHateren, Kodak)")
+parser.add_argument("data_filepath", help="The full path to dataset on disk")
+parser.add_argument("-l", "--logfile_dir",
+                    help="Optionally checkpoint the model here")
+script_args = parser.parse_args()
+
+if script_args.logfile_dir is not None:
+  SC_PARAMS['checkpoint_schedule'] = {'checkpoint_folder_fullpath':
+      script_args.logfile_dir + RUN_IDENTIFIER,
+      NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None}
 
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)
@@ -48,15 +64,18 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 one_mil_image_patches = create_patch_training_set(
-    ['patch'], (PATCH_HEIGHT, PATCH_WIDTH),
-    BATCH_SIZE, NUM_BATCHES, edge_buffer=5, dataset='Field_NW_unwhitened',
-    datasetparams={'exclude': []})['batched_patches']
-
+    ['patch', 'shift_by_constant'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
+    edge_buffer=5, dataset=script_args.data_id,
+    datasetparams={'filepath': script_args.data_filepath,
+                   'exclude': [],
+                   'shift_constant': -128.})
 #################################################################
 # save these to disk if you want always train on the same patches
 # or if you want to speed things up in the future
 #################################################################
-# pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_October24.p', 'wb'))
+pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Kodak/kodak_patches_1mil_8x8_shiftedbyconst128.p', 'wb'))
+
+input('Wait here buckaroo')
 
 # one_mil_image_patches = pickle.load(open(
 #     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_October24.p', 'rb')).astype('float32')
@@ -75,7 +94,7 @@ liveplot_obj = TrainingLivePlot(
                       'img_width': PATCH_WIDTH, 'plot_width': 16,
                       'plot_height': 16, 'renorm imgs': True,
                       'display_ordered': True},
-    code_plot_params={'size': CODE_SIZE})
+    code_plot_params={'size': CODE_SIZE, 'num_displayed': 20})
 
 SC_PARAMS['training_visualization_schedule']['liveplot_object_reference'] = liveplot_obj
 

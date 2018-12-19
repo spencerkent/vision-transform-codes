@@ -1,9 +1,13 @@
 """
-Train an ICA dictionary on the Field natural images dataset
+Train an ICA dictionary. These settings for Field natural images dset
 """
 import sys
-sys.path.insert(0, '/home/spencerkent/Projects/vision-transform-codes/vision_transform_codes/')
+import os
+examples_fullpath = os.path.dirname(os.path.abspath(__file__))
+toplevel_dir_fullpath = examples_fullpath[:examples_fullpath.rfind('/')+1]
+sys.path.insert(0, toplevel_dir_fullpath)
 
+import argparse
 import pickle
 import numpy as np
 from matplotlib import pyplot as plt
@@ -31,12 +35,24 @@ ICA_PARAMS = {
       2 * NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1},
       5 * NUM_BATCHES: {'stepsize': 0.0025, 'num_iters': 1},
       7 * NUM_BATCHES: {'stepsize': 0.001, 'num_iters': 1}},
-    'checkpoint_schedule': {
-      'checkpoint_folder_fullpath': '/media/expansion1/spencerkent/logfiles/vision_transform_codes/' + RUN_IDENTIFIER,
-      NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None},
     'training_visualization_schedule': {0: None, 1000: None, 2000: None}}
 ICA_PARAMS['training_visualization_schedule'].update(
     {NUM_BATCHES*x: None for x in range(NUM_EPOCHS)})
+
+# Arguments for dataset and logging
+parser = argparse.ArgumentParser()
+parser.add_argument("data_id",
+    help="Name of the dataset (currently allowable: " +
+         "Field_NW_whitened, Field_NW_unwhitened, vanHateren)")
+parser.add_argument("data_filepath", help="The full path to dataset on disk")
+parser.add_argument("-l", "--logfile_dir",
+                    help="Optionally checkpoint the model here")
+script_args = parser.parse_args()
+
+if script_args.logfile_dir is not None:
+  ICA_PARAMS['checkpoint_schedule'] = {'checkpoint_folder_fullpath':
+      script_args.logfile_dir + RUN_IDENTIFIER,
+      NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None}
 
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)
@@ -44,9 +60,10 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 one_mil_image_patches = create_patch_training_set(
-    ['patch'], (PATCH_HEIGHT, PATCH_WIDTH),
-    BATCH_SIZE, NUM_BATCHES, edge_buffer=5, dataset='Field_NW_unwhitened',
-    datasetparams={'exclude': []})['batched_patches']
+    ['patch'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES,
+    edge_buffer=5, dataset=script_args.data_id,
+    datasetparams={'filepath': script_args.data_filepath,
+                   'exclude': []})['batched_patches']
 
 #################################################################
 # save these to disk if you want always train on the same patches
@@ -71,7 +88,7 @@ liveplot_obj = TrainingLivePlot(
                       'img_width': PATCH_WIDTH, 'plot_width': 16,
                       'plot_height': 16, 'renorm imgs': True,
                       'display_ordered': True},
-    code_plot_params={'size': CODE_SIZE})
+    code_plot_params={'size': CODE_SIZE, 'num_displayed': 20})
 
 ICA_PARAMS['training_visualization_schedule']['liveplot_object_reference'] = liveplot_obj
 
