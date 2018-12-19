@@ -21,10 +21,10 @@ RUN_IDENTIFIER = 'test_sparse_coding'
 
 BATCH_SIZE = 250
 NUM_BATCHES = 4000  # 1 million patches total
-PATCH_HEIGHT = 8
-PATCH_WIDTH = 8
+PATCH_HEIGHT = 16
+PATCH_WIDTH = 16
 
-CODE_SIZE = 64
+CODE_SIZE = 1 * PATCH_HEIGHT*PATCH_WIDTH  # critically sampled
 NUM_EPOCHS = 30
 
 SC_PARAMS = {
@@ -63,25 +63,21 @@ torch.cuda.set_device(1)
 # otherwise can put on 'cuda:0' or 'cpu'
 
 # manually create large training set with one million whitened patches
-one_mil_image_patches = create_patch_training_set(
-    ['patch', 'shift_by_constant'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
+patch_dataset = create_patch_training_set(
+    ['patch', 'center'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
-                   'exclude': [],
-                   'shift_constant': -128.})
+                   'exclude': []})
 #################################################################
 # save these to disk if you want always train on the same patches
 # or if you want to speed things up in the future
 #################################################################
-pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Kodak/kodak_patches_1mil_8x8_shiftedbyconst128.p', 'wb'))
+# pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_November11.p', 'wb'))
 
-input('Wait here buckaroo')
-
-# one_mil_image_patches = pickle.load(open(
-#     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_October24.p', 'rb')).astype('float32')
+# patch_dataset = pickle.load(open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_November11.p', 'wb'))
 
 # send ALL image patches to the GPU
-image_patches_gpu = torch.from_numpy(one_mil_image_patches).to(torch_device)
+image_patches_gpu = torch.from_numpy(patch_dataset['batched_patches']).to(torch_device)
 
 # create the dictionary Tensor on the GPU
 sparse_coding_dictionary = torch.randn((PATCH_HEIGHT*PATCH_WIDTH, CODE_SIZE),

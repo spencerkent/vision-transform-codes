@@ -89,7 +89,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     ckpt_sched = all_params['checkpoint_schedule']
     ckpt_path = ckpt_sched.pop('checkpoint_folder_fullpath')
   else:
-    checkpoint_schedule = None
+    ckpt_sched = None
   if 'training_visualization_schedule' in all_params:
     trn_vis_sched = all_params['training_visualization_schedule']
     lplot_obj_ref = trn_vis_sched.pop('liveplot_object_reference')

@@ -43,7 +43,7 @@ ICA_PARAMS['training_visualization_schedule'].update(
 parser = argparse.ArgumentParser()
 parser.add_argument("data_id",
     help="Name of the dataset (currently allowable: " +
-         "Field_NW_whitened, Field_NW_unwhitened, vanHateren)")
+         "Field_NW_whitened, Field_NW_unwhitened, vanHateren, Kodak)")
 parser.add_argument("data_filepath", help="The full path to dataset on disk")
 parser.add_argument("-l", "--logfile_dir",
                     help="Optionally checkpoint the model here")
@@ -59,23 +59,23 @@ torch.cuda.set_device(1)
 # otherwise can put on 'cuda:0' or 'cpu'
 
 # manually create large training set with one million whitened patches
-one_mil_image_patches = create_patch_training_set(
-    ['patch'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES,
+patch_dataset = create_patch_training_set(
+    ['patch', 'center'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
-                   'exclude': []})['batched_patches']
+                   'exclude': []})
 
 #################################################################
 # save these to disk if you want always train on the same patches
 # or if you want to speed things up in the future
 #################################################################
-# pickle.dump(one_mil_image_patches, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'wb'))
+# pickle.dump(patch_dataset, open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'wb'))
 
-# one_mil_image_patches = pickle.load(open(
+# patch_dataset = pickle.load(open(
 #     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'rb')).astype('float32')
 
 # send ALL image patches to the GPU
-image_patches_gpu = torch.from_numpy(one_mil_image_patches).to(torch_device)
+image_patches_gpu = torch.from_numpy(patch_dataset['batched_patches']).to(torch_device)
 
 # create the dictionary Tensor on the GPU
 Q, R = np.linalg.qr(np.random.standard_normal((PATCH_HEIGHT*PATCH_WIDTH,
