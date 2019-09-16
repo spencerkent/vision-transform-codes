@@ -16,7 +16,7 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
   Parameters
   ----------
   DFT_num_samples : (int, int)
-      The number of samples on the DFT vertical axis and the DFT horizontal axis
+      The number of samples on the DFT vertical ax and the DFT horizontal ax
   filter_parameters : dictionary
       Parameters of the filter. These may vary depending on the filter shape.
       Smoother filters reduce ringing artifacts but can throw away a lot of
@@ -24,11 +24,11 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
       but may add other filter shapes in the future. The shape-specific filter
       parameters are given below
       'shape': 'exponential'
-        'cutoff' : float \in [0, 1]
-            A fraction of the 2d nyquist frequency at which to set the cutoff.
-        'order' : float \in [1, np.inf)
-            The order of the exponential. In the Vision Research paper this is
-            4. We can make the cutoff sharper by increasing this number
+      'cutoff' : float \in [0, 1]
+          A fraction of the 2d nyquist frequency at which to set the cutoff.
+      'order' : float \in [1, np.inf)
+          The order of the exponential. In the Vision Research paper this is
+          4. We can make the cutoff sharper by increasing this number
   Returns
   -------
   lpf_DFT = ndarray(complex128, size(DFT_num_samples[0], DFT_num_samples[1]))
@@ -42,7 +42,7 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
     assert filter_parameters['cutoff'] >= 0.0
     assert filter_parameters['order'] >= 1.0
     freqs_vert = np.arange(nv) * (1. / nv)
-    # we want the filter to reflect the 'centering' operation of np.fft.fftshift
+    # we want filter to reflect the 'centering' operation of np.fft.fftshift
     if nv % 2 == 0:   # even number of samples
       freqs_vert[nv//2:] = freqs_vert[nv//2:] - 1
     else:
@@ -51,7 +51,7 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
 
     # do this for the horizontal axis
     freqs_horz = np.arange(nh) * (1. / nh)
-    # we want the filter to reflect the 'centering' operation of np.fft.fftshift
+    # we want filter to reflect the 'centering' operation of np.fft.fftshift
     if nh % 2 == 0:   # even number of samples
       freqs_horz[nh//2:] = freqs_horz[nh//2:] - 1
     else:
@@ -80,7 +80,7 @@ def get_whitening_ramp_filter(DFT_num_samples):
   Parameters
   ----------
   DFT_num_samples : (int, int)
-      The number of samples in the DFT vertical axis and the DFT horizontal axis
+      The number of samples in the DFT vertical ax and the DFT horizontal ax
 
   Returns
   -------
@@ -158,6 +158,27 @@ def whiten_center_surround(image):
   return filter_image(image, combined_filter)
 
 
+def unwhiten_center_surround(image):
+  """
+  Undoes the scheme described in the Vision Research sparse coding paper
+
+  We have the composition of a low pass filter with a ramp in spatial frequency
+  which together produces a center-surround filter in the image domain
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w))
+      An image of height h and width w
+  """
+  lpf = get_low_pass_filter(image.shape,
+      {'shape': 'exponential', 'cutoff': 0.8, 'order': 4.0})
+  wf = get_whitening_ramp_filter(image.shape)
+  combined_filter = wf * lpf
+  combined_filter /= np.max(np.abs(combined_filter))
+  #^ make the maximum filter magnitude equal to 1
+  return filter_image(image, 1. / combined_filter)
+
+
 def center_on_origin(flat_data):
   """
   Makes each component of data have mean zero across the dataset
@@ -179,6 +200,29 @@ def center_on_origin(flat_data):
   assert flat_data.dtype in ['float32', 'uint8']
   original_means = np.mean(flat_data, axis=1)
   return (flat_data - original_means[:, None]).astype('float32'), original_means
+
+
+def subtract_patch_DC(flat_data):
+  """
+  Makes each patch have an average illumination of zero
+
+  Parameters
+  ----------
+  flat_data : ndarray(float32 or uint8, size=(n, D))
+      n is the dimensionality of a single datapoint and D is the size of the
+      dataset over which we are taking the mean.
+
+  Returns
+  -------
+  zero_dc_data : ndarray(float32, size=(n, D))
+      The data, now with a DC value of zero
+  original_means : ndarray(float32, size=(n,))
+      The patch-specific DC values of the original data. Can be used to
+      uncenter the data later (for instance, after dictionary learning)
+  """
+  assert flat_data.dtype in ['float32', 'uint8']
+  original_means = np.mean(flat_data, axis=0)
+  return (flat_data - original_means[None, :]).astype('float32'), original_means
 
 
 def normalize_variance(flat_data):
@@ -294,8 +338,8 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
   ----------
   order_of_preproc_ops : list(str)
       Specifies the preprocessing operations to perform on the data. Currently
-      available operations are {'patch', 'center', 'normalize_variance',
-      'whiten_center_surround', 'shift_by_constant'}.
+      available operations are {'patch', 'center', 'subtract_patch_dc',
+      'normalize_variance', 'whiten_center_surround', 'shift_by_constant'}.
       Example: (we want to perform Bruno's whitening in the fourier domain and
                 also have the components of each patch have zero mean)
           ['whiten_center_surround', 'patch', 'zero_mean']
@@ -415,12 +459,17 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
     elif preproc_op == 'center':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before trying to center it')
-      all_patches, orig_means = center_on_origin(all_patches)
+      all_patches, component_means = center_on_origin(all_patches)
 
     elif preproc_op == 'normalize_variance':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before normalizing it')
       all_patches, orig_variances = normalize_variance(all_patches)
+
+    elif preproc_op == 'subtract_patch_dc':
+      if not already_patched_flag:
+        raise KeyError('You ought to patch the data before trying to sub DC')
+      all_patches, patch_means = subtract_patch_DC(all_patches)
 
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)
@@ -430,7 +479,9 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
                     (num_batches, batch_size, -1)).transpose((0, 2, 1))}
                  #^ size=(k, n, b)
   if 'center' in order_of_preproc_ops:
-    return_dict['original_patch_means'] = orig_means
+    return_dict['original_component_means'] = component_means
+  if 'subtract_patch_dc' in order_of_preproc_ops:
+    return_dict['original_patch_means'] = patch_means
   if 'normalize_variance' in order_of_preproc_ops:
     return_dict['original_patch_variances'] = orig_variances
 
