@@ -8,8 +8,16 @@ from scipy.stats import kurtosis
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import FormatStrFormatter
+from matplotlib.lines import Line2D
 
 tab10colors = plt.get_cmap('tab10').colors
+
+
+def compute_pSNR(target, reconstruction):
+  signal_magnitude = np.max(target) - np.min(target)
+  MSE = np.mean(np.square(target - reconstruction))
+  return 10. * np.log10((signal_magnitude**2)/MSE)
+
 
 class TrainingLivePlot(object):
   """
@@ -86,6 +94,43 @@ class TrainingLivePlot(object):
         self.lineplot_refs.append(linerefs)
       self.requires.append('codes')
 
+    ##########################
+    # Objective function plots
+    ##########################
+    self.recon_psnr_fig, self.recon_ax = plt.subplots(1, 1, figsize=(10, 5))
+    self.sparsity_fig, self.l1_ax = plt.subplots(1, 1, figsize=(10, 5))
+    self.l0_ax = self.l1_ax.twinx()
+    self.recon_psnr_ref = Line2D([], [], color='k', linewidth=3)
+    self.recon_psnr_saved = []
+    self.l1_ref = Line2D([], [], color='b', linewidth=3)
+    self.l1_saved = []
+    self.l0_ref = Line2D([], [], color='g', linewidth=3)
+    self.l0_saved = []
+    self.recon_ax.add_line(self.recon_psnr_ref)
+    self.l1_ax.add_line(self.l1_ref)
+    self.l0_ax.add_line(self.l0_ref)
+
+    self.recon_min = -10.0
+    self.recon_max = 50.0
+    self.recon_ax.set_ylim(self.recon_min, self.recon_max)
+    self.recon_ax.set_xlim(0, 100)
+    self.recon_ax.set_title('pSNR of reconstructions', fontsize=18)
+    self.recon_ax.set_ylabel('pSNR', fontsize=18)
+    self.recon_ax.set_xlabel('Liveplot visualization iter', fontsize=18)
+    self.l1_min = 0.0
+    self.l1_max = 100
+    self.l1_ax.set_ylim(self.l1_min, self.l1_max)
+    self.l1_ax.set_xlim(0, 100)
+    self.l1_ax.set_ylabel('L1', fontsize=18)
+    self.l1_ax.set_xlabel('Liveplot visualization iter', fontsize=18)
+    self.l1_ax.set_title('Sparsity of codes', fontsize=18)
+    self.recon_ax.set_xlabel('Liveplot visualization iter', fontsize=18)
+    self.l0_min = 0.0
+    self.l0_max = 100
+    self.l0_ax.set_ylim(self.l0_min, self.l0_max)
+    self.l0_ax.set_ylabel('L0', fontsize=18)
+    self.requires.append('dictionary_codes_and_patches')
+
   def Requires(self):
     return self.requires
 
@@ -140,6 +185,24 @@ class TrainingLivePlot(object):
         self.code_ax[d_idx].set_ylim(min_code_val, max_code_val)
       plt.pause(0.1)
 
+    elif which_plot == 'dictionary_codes_and_patches':
+      self.recon_psnr_saved.append(compute_pSNR(data['patches'], np.dot(data['dictionary'], data['codes'])))
+      self.l1_saved.append(np.mean(np.sum(np.abs(data['codes']), axis=0)))
+      self.l0_saved.append(np.mean(np.sum(data['codes'] != 0.0, axis=0)))
+      self.recon_psnr_ref.set_data(np.arange(len(self.recon_psnr_saved)),
+                                   self.recon_psnr_saved)
+      self.l1_ref.set_data(np.arange(len(self.l1_saved)), self.l1_saved)
+      self.l0_ref.set_data(np.arange(len(self.l0_saved)), self.l0_saved)
+      self.recon_min = min(self.recon_psnr_saved)
+      self.recon_max = max(self.recon_psnr_saved)
+      self.l1_min = min(self.l1_saved)
+      self.l1_max = max(self.l1_saved)
+      self.l0_min = min(self.l0_saved)
+      self.l0_max = max(self.l0_saved)
+      self.recon_ax.set_ylim(self.recon_min, self.recon_max)
+      self.l1_ax.set_ylim(self.l1_min, self.l1_max)
+      self.l0_ax.set_ylim(self.l0_min, self.l0_max)
+      plt.pause(0.1)
 
 def display_dictionary(dictionary, image_dims, plot_title="", renormalize=True):
   """
