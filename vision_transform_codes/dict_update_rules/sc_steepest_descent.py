@@ -11,9 +11,9 @@ def run(images, dictionary, codes, stepsize=0.001, num_iters=1,
   Parameters
   ----------
   images : torch.Tensor(float32, size=(n, b))
-      An array of images (probably just small patches) that to find the sparse
-      code for. n is the size of each image and b is the number of images in
-      this batch
+      An array of images (probably just small patches) that we want to find the
+      sparse code for. n is the size of each image and b is the number of
+      images in this batch
   dictionary : torch.Tensor(float32, size=(n, s))
       This is the dictionary of basis functions that we can use to descibe the
       images. n is the size of each image and s in the size of the code.

@@ -7,22 +7,21 @@ import torch
 
 def train_dictionary(image_dataset):
   """
-  Compute the PCA dictionary matrix in one step
+  Computes the PCA dictionary matrix in one step
 
   Parameters
   ----------
   image_dataset : torch.Tensor(float32, size=(n, D))
-      The full dataset, patches packed one into each column. Each row of
+      The full dataset, samples packed one into each column. Each row of
       this matrix should be mean zero.
 
   Returns
   -------
   PCA_dictionary : torch.Tensor(float32, size(n, s))
-      Each basis element is a column of this matrix. The original data dimension
-      is n.
+      Each basis element is a column of this matrix. The original data
+      dimension is n.
   """
-  assert np.all(np.abs(np.zeros((image_dataset.size(0),), dtype='float32') -
-                       torch.mean(image_dataset, dim=1).cpu().numpy()) < 1e-6)
+  assert np.all(np.abs(torch.mean(image_dataset, dim=1).cpu().numpy()) < 1e-6)
 
   if image_dataset.size(0) > image_dataset.size(1):
     # If the dimensionality of each datapoint is high, we want to compute the
@@ -35,6 +34,6 @@ def train_dictionary(image_dataset):
     covar = torch.mm(image_dataset, image_dataset.t()) / image_dataset.size(1)
     U, w, _ = torch.svd(covar)
 
-  # remember the PCA transform not completely unique. The defining criteria is
-  # *invariant to sign flips of any of the basis vectors
+  # remember the PCA transform is not completely unique. The defining criteria
+  # is *invariant to sign flips of any of the basis vectors
   return U.float()

@@ -3,7 +3,7 @@ Implementation of Fast Iterative Soft Thresholding (Accelerated proximal grad)
 """
 import torch
 
-def run(images, dictionary, sparsity_weight, max_num_iters,
+def run(images, dictionary, sparsity_weight, max_num_iters=100,
         convergence_epsilon=1e-3, nonnegative_only=False):
   """
   Runs steps of Fast Iterative Soft Thresholding, with fixed stepsize
@@ -15,17 +15,17 @@ def run(images, dictionary, sparsity_weight, max_num_iters,
   Parameters
   ----------
   images : torch.Tensor(float32, size=(n, b))
-      An array of images (probably just small patches) that to find the sparse
-      code for. n is the size of each image and b is the number of images in
-      this batch
+      An array of images (probably just small patches) that we want to find the
+      sparse code for. n is the size of each image and b is the number of
+      images in this batch
   dictionary : torch.Tensor(float32, size=(n, s))
       This is the dictionary of basis functions that we can use to descibe the
       images. n is the size of each image and s in the size of the code.
   sparsity_weight : torch.Tensor(float32)
       This is the weight on the sparsity cost term in the sparse coding cost
       function. It is often denoted as \lambda
-  max_num_iters : int
-      Maximum number of steps of ISTA to run
+  max_num_iters : int, optional
+      Maximum number of steps of ISTA to run, Default 100.
   convergence_epsilon : float, optional
       Terminate if code changes by less than this amount per component,
       normalized by stepsize. Default 1e-3.
@@ -56,11 +56,11 @@ def run(images, dictionary, sparsity_weight, max_num_iters,
   old_codes = codes.clone()
   aux_points = codes.clone()
   #^ these are the auxiliary points that we actually compute gradients w.r.t.
-  avg_per_component_change = torch.mean(torch.abs(codes - old_codes))
+  avg_per_component_delta = torch.mean(torch.abs(codes - old_codes))
 
   iter_idx = 0
   while (iter_idx < max_num_iters and
-         (avg_per_component_change > convergence_epsilon or iter_idx == 0)):
+         (avg_per_component_delta > convergence_epsilon or iter_idx == 0)):
     old_codes = codes.clone()
     t_k = t_kplusone
 
@@ -85,7 +85,7 @@ def run(images, dictionary, sparsity_weight, max_num_iters,
 
     aux_points = codes + beta_kplusone*(change_in_codes)
 
-    avg_per_component_change = torch.mean(torch.abs(change_in_codes) / stepsize)
+    avg_per_component_delta = torch.mean(torch.abs(change_in_codes) / stepsize)
     iter_idx += 1
 
   return codes

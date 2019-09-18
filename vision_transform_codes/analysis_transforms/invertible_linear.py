@@ -18,7 +18,7 @@ def run(images, dictionary, orthonormal=False):
       images. n is the size of each image and is also the size of the code.
   orthonormal : bool, optional
       If the matrix is orthonormal we prefer to just take the transpose for
-      computational and numerical reasons
+      computational and numerical reasons. Default False.
   """
   if orthonormal:
     return torch.mm(dictionary.t(), images)

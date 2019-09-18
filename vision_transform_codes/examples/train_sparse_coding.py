@@ -1,6 +1,8 @@
 """
-Train a sparse coding dictionary. These settings for Field natural images dset
+Example: Train a sparse coding dictionary. These settings for Field natural
+images dset
 """
+
 import sys
 import os
 examples_fullpath = os.path.dirname(os.path.abspath(__file__))
@@ -25,7 +27,7 @@ PATCH_HEIGHT = 16
 PATCH_WIDTH = 16
 
 CODE_SIZE = 1 * PATCH_HEIGHT*PATCH_WIDTH  # critically sampled
-NUM_EPOCHS = 30
+NUM_EPOCHS = 10
 
 SC_PARAMS = {
     'num_epochs': NUM_EPOCHS,
@@ -56,7 +58,7 @@ script_args = parser.parse_args()
 if script_args.logfile_dir is not None:
   SC_PARAMS['checkpoint_schedule'] = {'checkpoint_folder_fullpath':
       script_args.logfile_dir + RUN_IDENTIFIER,
-      NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None}
+      NUM_BATCHES: None, (NUM_EPOCHS*NUM_BATCHES)-1: None}
 
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)
@@ -64,7 +66,8 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 patch_dataset = create_patch_training_set(
-    ['patch', 'center'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
+    ['whiten_center_surround', 'patch', 'center'],
+    (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
                    'exclude': []})
@@ -77,7 +80,8 @@ patch_dataset = create_patch_training_set(
 # patch_dataset = pickle.load(open('/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_November11.p', 'wb'))
 
 # send ALL image patches to the GPU
-image_patches_gpu = torch.from_numpy(patch_dataset['batched_patches']).to(torch_device)
+image_patches_gpu = torch.from_numpy(
+    patch_dataset['batched_patches']).to(torch_device)
 
 # create the dictionary Tensor on the GPU
 sparse_coding_dictionary = torch.randn((PATCH_HEIGHT*PATCH_WIDTH, CODE_SIZE),
@@ -90,9 +94,11 @@ liveplot_obj = TrainingLivePlot(
                       'img_width': PATCH_WIDTH, 'plot_width': 16,
                       'plot_height': 16, 'renorm imgs': True,
                       'display_ordered': True},
-    code_plot_params={'size': CODE_SIZE, 'num_displayed': 20})
+    code_plot_params={'size': CODE_SIZE, 'num_displayed': 20},
+    other_plot_params={'sparsity_weight': 0.1})
 
-SC_PARAMS['training_visualization_schedule']['liveplot_object_reference'] = liveplot_obj
+SC_PARAMS['training_visualization_schedule'][
+    'liveplot_object_reference'] = liveplot_obj
 
 print("Here we go!")
 sc_train(image_patches_gpu, sparse_coding_dictionary, SC_PARAMS)

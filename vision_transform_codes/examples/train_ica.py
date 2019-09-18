@@ -1,6 +1,7 @@
 """
-Train an ICA dictionary. These settings for Field natural images dset
+Example: Train an ICA dictionary. These settings for Field natural images dset
 """
+
 import sys
 import os
 examples_fullpath = os.path.dirname(os.path.abspath(__file__))
@@ -52,7 +53,7 @@ script_args = parser.parse_args()
 if script_args.logfile_dir is not None:
   ICA_PARAMS['checkpoint_schedule'] = {'checkpoint_folder_fullpath':
       script_args.logfile_dir + RUN_IDENTIFIER,
-      NUM_BATCHES: None, 10*NUM_BATCHES: None, 20*NUM_BATCHES:None}
+      NUM_BATCHES: None, (NUM_EPOCHS*NUM_BATCHES)-1: None}
 
 torch_device = torch.device('cuda:1')
 torch.cuda.set_device(1)
@@ -60,7 +61,8 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 patch_dataset = create_patch_training_set(
-    ['patch', 'center'], (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES,
+    ['whiten_center_surround', 'patch', 'center'],
+    (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
                    'exclude': []})
@@ -75,7 +77,8 @@ patch_dataset = create_patch_training_set(
 #     '/media/expansion1/spencerkent/Datasets/Field_natural_images/one_million_patches_whitened_June25.p', 'rb')).astype('float32')
 
 # send ALL image patches to the GPU
-image_patches_gpu = torch.from_numpy(patch_dataset['batched_patches']).to(torch_device)
+image_patches_gpu = torch.from_numpy(
+    patch_dataset['batched_patches']).to(torch_device)
 
 # create the dictionary Tensor on the GPU
 Q, R = np.linalg.qr(np.random.standard_normal((PATCH_HEIGHT*PATCH_WIDTH,
@@ -90,7 +93,8 @@ liveplot_obj = TrainingLivePlot(
                       'display_ordered': True},
     code_plot_params={'size': CODE_SIZE, 'num_displayed': 20})
 
-ICA_PARAMS['training_visualization_schedule']['liveplot_object_reference'] = liveplot_obj
+ICA_PARAMS['training_visualization_schedule'][
+    'liveplot_object_reference'] = liveplot_obj
 
 print("Here we go!")
 ica_train(image_patches_gpu, ica_dictionary, ICA_PARAMS)

@@ -1,8 +1,8 @@
 """
 This uses the diagonal of the Hessian to rescale the updates
 
-It's like getting a quadratic update for each coefficient independently, and not
-computing the full hessian.
+It's like getting a quadratic update for each coefficient independently, while
+not computing the full hessian.
 """
 import torch
 
@@ -14,9 +14,9 @@ def run(images, dictionary, codes, hessian_diagonal, stepsize=0.001,
   Parameters
   ----------
   images : torch.Tensor(float32, size=(n, b))
-      An array of images (probably just small patches) that to find the sparse
-      code for. n is the size of each image and b is the number of images in
-      this batch
+      An array of images (probably just small patches) that we want to find the
+      sparse code for. n is the size of each image and b is the number of
+      images in this batch
   dictionary : torch.Tensor(float32, size=(n, s))
       This is the dictionary of basis functions that we can use to descibe the
       images. n is the size of each image and s in the size of the code.
@@ -24,8 +24,8 @@ def run(images, dictionary, codes, hessian_diagonal, stepsize=0.001,
       This is the current set of codes for a batch of images. s is the
       dimensionality of the code and b is the number of images in the batch
   hessian_diagonal : torch.Tensor(float32, size=(s,))
-      An estimate of the diagonal of the hessian that we'll compute outside this
-      loop.
+      An estimate of the diagonal of the hessian that we'll compute outside of
+      this function call.
   stepsize : torch.Tensor(float32)
       The step size for each iteration of the quad. descent. Keep this small
   num_iters : int

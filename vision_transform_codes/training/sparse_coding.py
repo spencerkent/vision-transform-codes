@@ -5,7 +5,7 @@ This implements the sparse coding dictionary learning algorithm
 import time
 import os
 import pickle
-import json
+import yaml
 from matplotlib import pyplot as plt
 import torch
 
@@ -23,8 +23,8 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       The tensor is an array of size (k, n, b) where k is the total number of
       batches, n is the (flattened) size of each image, and b is the size of
       an individual batch. If image_dataset is a torch.DataLoader that means
-      each time we make a __getitem__ call it will return a batch of images that
-      it has fetched and preprocessed from disk. This is done in cpu
+      each time we make a __getitem__ call it will return a batch of images
+      that it has fetched and preprocessed from disk. This is done in cpu
       multiprocesses that run asynchronously from the GPU. If the whole dataset
       is too large to be loaded into memory, this is really our only option.
   init_dictionary : torch.Tensor(float32, size=(n, s))
@@ -62,7 +62,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         'plot_object_reference' is a reference to a TrainingLivePlot object
         that we can call the UpdatePlot method on to display the progress of
         training the model. All the other keys are specific iterations at
-        which to plot the dictionary and some sample codes. Again
+        which to plot the dictionary and some sample codes.
   """
 
   ##########################
@@ -100,10 +100,16 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     # dump the parameters of this training session in human-readable JSON
     if not os.path.isdir(os.path.abspath(ckpt_path)):
       os.mkdir(ckpt_path)
+    else:
+      print('-------\n',
+            'Warning, saving checkpoints into existing directory.',
+            'May overwrite existing logs\n',
+            '-------')
     checkpointed_params = {
         k: all_params[k] for k in all_params if k not in
         ['checkpoint_schedule', 'training_visualization_schedule']}
-    json.dump(checkpointed_params, open(ckpt_path+'/training_params.json', 'w'))
+    yaml.dump(checkpointed_params,
+              open(ckpt_path+'/training_params.yaml', 'w'))
 
   # let's only import the things we need
   if code_inf_alg == 'ista':
@@ -137,7 +143,8 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     for batch_idx, batch_images in enumerate(image_dataset):
       if total_iter_idx % 1000 == 0:
         print('Iteration', total_iter_idx, 'complete')
-        print('Time elapsed', time.time() - starttime)
+        print('Time elapsed:', '{:.1f}'.format(time.time() - starttime),
+              'seconds')
 
       if not batch_images.is_cuda:
         # We have to send image batch to the GPU
@@ -192,22 +199,22 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         sc_steepest_descent.run(batch_images, dictionary, codes,
                                 d_upd_stp, d_upd_niters)
       elif dict_update_alg == 'sc_cheap_quadratic_descent':
-        hessian_diag = hessian_diag.mul_(0.99) + torch.pow(codes, 2).mean(1)/100
+        hessian_diag = (hessian_diag.mul_(0.99) +
+                        torch.pow(codes, 2).mean(1)/100)  # credit Yubei Chen
         sc_cheap_quadratic_descent.run(batch_images, dictionary, codes,
                                        hessian_diag, stepsize=d_upd_stp,
                                        num_iters=d_upd_niters)
-
       total_iter_idx += 1
 
     # we need to reshuffle the batches if we're not using a DataLoader
     if type(image_dataset) == torch.Tensor:
       # because of PyTorch's assumption of row-first reshaping this is a little
       # uglier than I would like...
-      image_dataset = image_dataset.permute(0, 2, 1).reshape(
-          -1, image_flatsize)[torch.randperm(num_batches * batch_size)].reshape(
+      image_dataset = image_dataset.permute(0, 2, 1).reshape(-1,
+          image_flatsize)[torch.randperm(num_batches * batch_size)].reshape(
               -1, batch_size, image_flatsize).permute(0, 2, 1)
 
     print("Epoch", epoch_idx, "finished")
     # let's make sure we release any unreferenced tensor to make their memory
     # visible to the OS
-    torch.cuda.empty_cache()
+    torch.cuda.empty_cache() # Sep17, 2019: This may no longer be needed

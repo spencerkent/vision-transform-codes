@@ -7,6 +7,9 @@ def run(dictionary, codes, stepsize=0.001, num_iters=1):
   """
   Updates the dictionary according to the ICA natural gradient learning rule
 
+  Notice that we do not need any images in order to calculate the natural
+  gradient update.
+
   Parameters
   ----------
   dictionary : torch.Tensor(float32, size=(n, s))
