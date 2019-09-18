@@ -89,7 +89,7 @@ def generate_idx_msg_huffman_tables(all_assignment_inds,
       counts_nz_idx_symbs[str(possible_nz_vals)] = 1
   # same thing for codeword index, but instead I'm going to limit it to 200
   # quantization points (way overkill of course)
-  for possible_cw_inds in range(-200, 200):
+  for possible_cw_inds in range(-3000, 3000):
     if str(possible_cw_inds) not in counts_cw_idx_symbs:
       counts_cw_idx_symbs[str(possible_cw_inds)] = 1
 
