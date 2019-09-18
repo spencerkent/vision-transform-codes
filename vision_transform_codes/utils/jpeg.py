@@ -226,3 +226,154 @@ def generate_jpg_binary_stream(assignment_inds, inds_of_zero_valued_cw,
   full_binary_stream += dc_value_str
 
   return full_binary_stream
+
+
+def generate_hybrid_jpg_binary_stream(assignment_inds, inds_of_zero_valued_cw, 
+                                      only_get_huffman_symbols=True, 
+                                      huffman_table_runlen=None, 
+                                      huffman_table_ac=None, 
+                                      huffman_table_dc=None):
+  """
+  Generates a binary stream that represents a single data point
+
+  Parameters
+  ----------
+  assignment_inds : ndarray(int) size=(s,)
+      The codeword indeces for a single datapoint
+  inds_of_zero_valued_cw : ndarray(int) size=(s, )
+      The indeces of the scalar codeword in each dimension that
+      is precisely zero.
+  only_get_huffman_symbols : bool, optional
+      This will just return symbols rather than a binary stream if this
+      parameter is set. it's just a convenience for the
+      huffman table generation function. Whenever you call this on test data
+      this should be False so that you get back a binary stream.
+  huffman_table_ac : dictionary(str)
+      Just a lookup table that converts symbol 1 in the JPEG runlength encoding
+      (an 8-bit hex string) into a binary codeword
+  huffman_table_dc : dictionary(str)
+      Just a lookup table that converts dc 'category' param in the JPEG
+      runlength encoding (a hex string) into a binary codeword.
+
+  Returns
+  -------
+  full_binary_stream : str  (if only_get_huffman_symbols=False)
+      The actual binary stream for this data point
+  runlength_stream : list(str)  (if only_get_huffman_symbols=True)
+      The runlength symbol sequence
+  dc_len_str : str  (if only_get_huffman_symbols=True)
+      The single string symbol giving the 'category' value for the dc component
+  """
+
+  if not only_get_huffman_symbols:
+    assert ((huffman_table_runlen is not None) and (huffman_table_dc is not None) 
+            and (huffman_table_ac is not None))
+
+  # our convention outside the scope of JPEG is that assignment indexes are
+  # always nonnegative. However, the JPEG source coding scheme assumes the
+  # index of the zero-valued codeword is 0, with all indexes less than this
+  # index negative. We just make this reassignment to make it match original
+  # JPEG.
+  jpeg_quant_assigns = assignment_inds - inds_of_zero_valued_cw
+
+  idx_last_nonzero = -1
+  for i, elem in enumerate(jpeg_quant_assigns):
+    if elem != 0:
+      idx_last_nonzero = i
+
+  runlength_stream = []  # this contains runlength values 
+
+  ac_value_stream = []  # these are the codeword indexes 
+
+  previous_zeros = 0
+  for code_idx in range(1, idx_last_nonzero + 1):
+    value = jpeg_quant_assigns[code_idx]
+    if value != 0:
+      runlength_stream.append(str(previous_zeros))
+      ac_value_stream.append(str(value))
+      previous_zeros = 0
+    else:
+      previous_zeros += 1
+  # append the EOB symbol
+  runlength_stream.append('00')
+
+  dc_value_str = str(jpeg_quant_assigns[0])
+
+  if only_get_huffman_symbols:
+    # we go no further, this is just being used to collect symbol statistics
+    # for generating the Huffman tables at training time
+    return runlength_stream, ac_value_stream, dc_value_str 
+
+  # we assign Huffman codewords for the runlength stream
+  binary_runlength_stream = [huffman_table_runlen[x] for x in runlength_stream]
+
+  # we assign Huffman codewords for the ac value stream
+  binary_ac_value_stream = [huffman_table_ac[x] for x in ac_value_stream]
+
+  # we assign Huffman codeword for the dc value
+  binary_dc_value = huffman_table_dc[dc_value_str]
+
+  full_binary_stream = ''
+  for rl_idx in range(len(binary_runlength_stream)):
+    full_binary_stream += binary_runlength_stream[rl_idx]
+  for ac_idx in range(len(binary_ac_value_stream)):
+    full_binary_stream += binary_ac_value_stream[ac_idx]
+  full_binary_stream += binary_dc_value
+
+  return full_binary_stream
+
+def generate_hybrid_ac_dc_huffman_tables(all_assignment_inds, inds_of_zero_valued_cw):
+  """
+  Generates a huffman table for the JPEG runlength symbols
+
+  Parameters
+  ----------
+  all_assignment_inds : ndarray(int) size=(D, s)
+      The set of codeword indeces for a training set. D is the size of the
+      training set and s is the size of the code
+  inds_of_zero_valued_cw : ndarray(int) size=(s, )
+      The indeces of the scalar codeword in each dimension that
+      is precisely zero.
+
+  Returns
+  -------
+  huff_table_ac : dictionary(str)
+      Just a lookup table that converts symbol 1 in the JPEG runlength encoding
+      (an 8-bit hex string) into a binary codeword
+  huff_table_dc : dictionary(str)
+      Just a lookup table that converts dc 'category' param in the JPEG
+      runlength encoding (a hex string) into a binary codeword.
+  """
+  counts_runlength_symbs = defaultdict(int)
+  counts_ac_symbs = defaultdict(int)
+  counts_dc_symbs = defaultdict(int)
+  for data_pt_idx in range(all_assignment_inds.shape[0]):
+    rl_symbs, ac_symbs, dc_symb = generate_hybrid_jpg_binary_stream(
+        all_assignment_inds[data_pt_idx], inds_of_zero_valued_cw,
+        only_get_huffman_symbols=True)
+    for x in rl_symbs:
+      counts_runlength_symbs[x] += 1
+    for x in ac_symbs:
+      counts_ac_symbs[x] += 1
+    counts_dc_symbs[dc_symb] += 1
+
+  # we have an issue of runlength symbols not seen in the training set.
+  # we can't afford to send any runlength symbol incorrectly because it can
+  # screw up the whole image. Thus, we have to make sure that any of the
+  # reasonably possible 8-bit symbols is in this dictionary.
+  # We'll just add them as if we only saw one occurence of them.
+  for runlengths in range(63):
+    if str(runlengths) not in counts_runlength_symbs:
+      counts_runlength_symbs[str(runlengths)] = 1
+  for ac_idx in range(-3000, 3000):
+    if str(ac_idx) not in counts_ac_symbs:
+      counts_ac_symbs[str(ac_idx)] = 1
+  for dc_idx in range(-3000, 3000):
+    if str(dc_idx) not in counts_dc_symbs:
+      counts_dc_symbs[str(dc_idx)] = 1
+
+  huff_table_runlen = compute_huffman_table(counts_runlength_symbs)
+  huff_table_ac = compute_huffman_table(counts_ac_symbs)
+  huff_table_dc = compute_huffman_table(counts_dc_symbs)
+
+  return huff_table_runlen, huff_table_ac, huff_table_dc
