@@ -141,7 +141,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
       if not batch_images.is_cuda:
         # We have to send image batch to the GPU
-        batch_images.cuda(async=True)
+        batch_images.cuda()
 
       ####################
       # Run code inference
@@ -175,6 +175,11 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
             lplot_obj_ref.UpdatePlot(dictionary.cpu().numpy(), 'dictionary')
           elif data_type == 'codes':
             lplot_obj_ref.UpdatePlot(codes.cpu().numpy(), 'codes')
+          elif data_type == 'dictionary_codes_and_patches':
+            lplot_obj_ref.UpdatePlot({'dictionary': dictionary.cpu().numpy(),
+                                      'codes': codes.cpu().numpy(),
+                                      'patches': batch_images.cpu().numpy()},
+                                      'dictionary_codes_and_patches')
 
       #######################
       # Update the dictionary
