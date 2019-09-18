@@ -65,7 +65,7 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
         -1. * np.power(spatial_freq_mag / (0.5 * filter_parameters['cutoff']),
                        filter_parameters['order']))
     #^ 0.5 is the 2d spatial nyquist frequency
-    lpf_DFT_mag[lpf_DFT_mag < 1e-7] = 1e-7
+    lpf_DFT_mag[lpf_DFT_mag < 1e-4] = 1e-4
     #^ avoid filter magnitudes that are 'too small' because this will make
     #  undoing the filter introduce arbitrary high-frequency noise
     lpf_DFT_phase = np.zeros(spatial_freq_mag.shape)
