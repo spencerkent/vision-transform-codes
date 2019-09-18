@@ -33,7 +33,8 @@ class TrainingLivePlot(object):
   code_plot_params : dictionary, optional
       Parameters of the code plot. Currently just 'size' : int
   """
-  def __init__(self, dict_plot_params, code_plot_params=None):
+  def __init__(self, dict_plot_params, code_plot_params=None,
+               other_plot_params=None):
 
     plt.ion()
 
@@ -85,11 +86,12 @@ class TrainingLivePlot(object):
       self.num_disp = code_plot_params['num_displayed']
       self.code_fig, self.code_ax = plt.subplots(self.num_disp, 1,
           figsize=(10, self.num_disp/1.5))
-      self.code_fig.suptitle('Random sample of codes', fontsize=15)
+      self.code_fig.suptitle('Random sample of codes', fontsize=12)
       self.lineplot_refs = []
       for c_idx in range(self.num_disp):
         _, linerefs, _ = self.code_ax[c_idx].stem(np.arange(self.code_size),
-            np.zeros(self.code_size), linefmt='-', markerfmt=' ')
+            np.zeros(self.code_size), linefmt='-', markerfmt=' ',
+            use_line_collection=False)
         plt.setp(linerefs, 'color', tab10colors[0])
         self.lineplot_refs.append(linerefs)
       self.requires.append('codes')
@@ -97,38 +99,70 @@ class TrainingLivePlot(object):
     ##########################
     # Objective function plots
     ##########################
-    self.recon_psnr_fig, self.recon_ax = plt.subplots(1, 1, figsize=(10, 5))
-    self.sparsity_fig, self.l1_ax = plt.subplots(1, 1, figsize=(10, 5))
+    self.metrics_fig, self.metrics_ax = plt.subplots(1, 3, figsize=(20, 5))
+    # self.sparsity_fig, self.l1_ax = plt.subplots(1, 1, figsize=(10, 5))
+    self.recon_sq_err_ax = self.metrics_ax[0]
+    self.l1_ax = self.metrics_ax[1]
+    self.bpdn_loss_ax = self.metrics_ax[2]
+    self.recon_psnr_ax = self.recon_sq_err_ax.twinx()
     self.l0_ax = self.l1_ax.twinx()
-    self.recon_psnr_ref = Line2D([], [], color='k', linewidth=3)
+    self.recon_sq_err_ref = Line2D([], [], color='k', linewidth=3)
+    self.recon_sq_err_saved = []
+    self.recon_psnr_ref = Line2D([], [], color='m', linewidth=3)
     self.recon_psnr_saved = []
     self.l1_ref = Line2D([], [], color='b', linewidth=3)
     self.l1_saved = []
     self.l0_ref = Line2D([], [], color='g', linewidth=3)
     self.l0_saved = []
-    self.recon_ax.add_line(self.recon_psnr_ref)
+    self.bpdn_loss_ref = Line2D([], [], color='k', linewidth=3)
+    self.bpdn_loss_saved = []
+
+    self.recon_sq_err_ax.add_line(self.recon_sq_err_ref)
+    self.recon_psnr_ax.add_line(self.recon_psnr_ref)
     self.l1_ax.add_line(self.l1_ref)
     self.l0_ax.add_line(self.l0_ref)
+    self.bpdn_loss_ax.add_line(self.bpdn_loss_ref)
+    self.sparsity_weight = (1.0 if other_plot_params is None
+                            else other_plot_params['sparsity_weight'])
 
-    self.recon_min = -10.0
-    self.recon_max = 50.0
-    self.recon_ax.set_ylim(self.recon_min, self.recon_max)
-    self.recon_ax.set_xlim(0, 100)
-    self.recon_ax.set_title('pSNR of reconstructions', fontsize=18)
-    self.recon_ax.set_ylabel('pSNR', fontsize=18)
-    self.recon_ax.set_xlabel('Liveplot visualization iter', fontsize=18)
+    self.recon_sq_err_min = 0.0
+    self.recon_sq_err_max = 100.0
+    self.recon_sq_err_ax.set_ylim(self.recon_sq_err_min, self.recon_sq_err_max)
+    self.recon_sq_err_ax.set_xlim(0, 100)
+    self.recon_sq_err_ax.set_yscale('log')
+    self.recon_sq_err_ax.set_ylabel('log(Squared error of reconstructions)', fontsize=10)
+    self.recon_sq_err_ax.yaxis.label.set_color('k')
+    self.recon_sq_err_ax.set_xlabel('Liveplot visualization iter', fontsize=10)
+
+    self.recon_psnr_min = -10.0
+    self.recon_psnr_max = 50.0
+    self.recon_psnr_ax.set_ylim(self.recon_psnr_min, self.recon_psnr_max)
+    self.recon_psnr_ax.set_xlim(0, 100)
+    self.recon_psnr_ax.set_ylabel('pSNR of reconstructions (dB)', fontsize=10)
+    self.recon_psnr_ax.yaxis.label.set_color('m')
+
     self.l1_min = 0.0
     self.l1_max = 100
     self.l1_ax.set_ylim(self.l1_min, self.l1_max)
     self.l1_ax.set_xlim(0, 100)
-    self.l1_ax.set_ylabel('L1', fontsize=18)
-    self.l1_ax.set_xlabel('Liveplot visualization iter', fontsize=18)
-    self.l1_ax.set_title('Sparsity of codes', fontsize=18)
-    self.recon_ax.set_xlabel('Liveplot visualization iter', fontsize=18)
+    self.l1_ax.set_ylabel('log(L1)', fontsize=10)
+    self.l1_ax.set_xlabel('Liveplot visualization iter', fontsize=10)
+    self.l1_ax.set_yscale('log')
+    self.l1_ax.yaxis.label.set_color('b')
     self.l0_min = 0.0
     self.l0_max = 100
     self.l0_ax.set_ylim(self.l0_min, self.l0_max)
-    self.l0_ax.set_ylabel('L0', fontsize=18)
+    self.l0_ax.set_ylabel('L0', fontsize=10)
+    self.l0_ax.yaxis.label.set_color('g')
+
+    self.bpdn_min = 0.0
+    self.bpdn_max = 1000
+    self.bpdn_loss_ax.set_ylim(self.bpdn_min, self.bpdn_max)
+    self.bpdn_loss_ax.set_xlim(0, 100)
+    # self.bpdn_loss_ax.set_yscale('log')
+    self.bpdn_loss_ax.set_ylabel('log(BPDN loss)', fontsize=10)
+    self.bpdn_loss_ax.set_xlabel('Liveplot visualization iter', fontsize=10)
+    self.bpdn_loss_ax.yaxis.label.set_color('k')
     self.requires.append('dictionary_codes_and_patches')
 
   def Requires(self):
@@ -186,22 +220,41 @@ class TrainingLivePlot(object):
       plt.pause(0.1)
 
     elif which_plot == 'dictionary_codes_and_patches':
-      self.recon_psnr_saved.append(compute_pSNR(data['patches'], np.dot(data['dictionary'], data['codes'])))
-      self.l1_saved.append(np.mean(np.sum(np.abs(data['codes']), axis=0)))
+      temp = np.dot(data['dictionary'], data['codes'])
+      self.recon_sq_err_saved.append(0.5*np.mean(np.square(data['patches'] - temp)))
+      self.recon_psnr_saved.append(compute_pSNR(data['patches'], temp))
+      self.l1_saved.append(np.mean(np.sum(np.abs(data['codes']), axis=-1)))
       self.l0_saved.append(np.mean(np.sum(data['codes'] != 0.0, axis=0)))
+      self.bpdn_loss_saved.append(self.recon_sq_err_saved[-1] +
+                                  self.sparsity_weight * self.l1_saved[-1])
+      self.recon_sq_err_ref.set_data(np.arange(len(self.recon_sq_err_saved)),
+                                     self.recon_sq_err_saved)
       self.recon_psnr_ref.set_data(np.arange(len(self.recon_psnr_saved)),
                                    self.recon_psnr_saved)
       self.l1_ref.set_data(np.arange(len(self.l1_saved)), self.l1_saved)
       self.l0_ref.set_data(np.arange(len(self.l0_saved)), self.l0_saved)
-      self.recon_min = min(self.recon_psnr_saved)
-      self.recon_max = max(self.recon_psnr_saved)
+      self.bpdn_loss_ref.set_data(np.arange(len(self.bpdn_loss_saved)),
+                                  self.bpdn_loss_saved)
+      self.recon_sq_err_min = min(self.recon_sq_err_saved)
+      self.recon_sq_err_max = max(self.recon_sq_err_saved)
+      self.recon_psnr_min = min(self.recon_psnr_saved)
+      self.recon_psnr_max = max(self.recon_psnr_saved)
       self.l1_min = min(self.l1_saved)
       self.l1_max = max(self.l1_saved)
       self.l0_min = min(self.l0_saved)
       self.l0_max = max(self.l0_saved)
-      self.recon_ax.set_ylim(self.recon_min, self.recon_max)
+      self.bpdn_min = min(self.bpdn_loss_saved)
+      self.bpdn_max = max(self.bpdn_loss_saved)
+      self.recon_sq_err_ax.set_ylim(self.recon_sq_err_min, self.recon_sq_err_max)
+      self.recon_psnr_ax.set_ylim(self.recon_psnr_min, self.recon_psnr_max)
       self.l1_ax.set_ylim(self.l1_min, self.l1_max)
       self.l0_ax.set_ylim(self.l0_min, self.l0_max)
+      self.bpdn_loss_ax.set_ylim(self.bpdn_min, self.bpdn_max)
+      self.recon_sq_err_ax.set_xlim(0, len(self.recon_sq_err_saved))
+      self.recon_psnr_ax.set_xlim(0, len(self.recon_psnr_saved))
+      self.l1_ax.set_xlim(0, len(self.l1_saved))
+      self.l0_ax.set_xlim(0, len(self.l0_saved))
+      self.bpdn_loss_ax.set_xlim(0, len(self.bpdn_loss_saved))
       plt.pause(0.1)
 
 def display_dictionary(dictionary, image_dims, plot_title="", renormalize=True):
