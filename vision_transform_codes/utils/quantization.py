@@ -251,6 +251,127 @@ def jpeg_compute_RD_point(raw_codes, target_patches, dictionary,
   else:
     return rate, distortion
 
+def hybrid_jpeg_compute_RD_point(raw_codes, target_patches, dictionary,
+                          quant_multiplier=None, binwidths=None,
+                          precomputed_codebook=None,
+                          precomputed_huff_tab_runlen=None,
+                          precomputed_huff_tab_ac_val=None,
+                          precomputed_huff_tab_dc_val=None,
+                          fullimg_reshape_params=None):
+  """
+  Computes a rate-distortion pair for a hybrid JPEG source coding
+
+  When we have yet to set the Huffman tables for the AC and DC components of
+  the code, we call this without the last three parameters above. Once this
+  has been computed on a training set, we can call this with those parameters
+  set in order to (much more quickly) compute an RD point for some data.
+
+  Parameters
+  ----------
+  raw_codes : ndarray(float) size=(s, D)
+      The dataset of D samples of codes of size s
+  target_patches : ndarray(float) size=(n, D)
+      The D target patches for each of these codes (each has dim n)
+  dictionary : ndarray(float) size=(n, s)
+      The dictionary matrix that synthesizes image patches. y=Ax, and this is A
+  quant_multiplier : float, optional
+      This is the 'quality' parameter for jpeg. It multiplies the hifi binwidths
+  binwidths : ndarray(float), optional
+      These are the baseline binwidths for jpeg that we want to use for each
+      coefficient of the code.
+  precomputed_codebook : list(ndarray), optional
+      The length s list that gives assignment points for each dimension of the
+      code. The number of assignment points will be variable per dimension.
+  precomputed_huff_tab_ac : dictionary(str), optional
+      Just a lookup table that converts JPEG symbol 1 (which is an 8-bit number
+      represented by its hex string) into a binary string
+  precomputed_huff_tab_dc : dictionary(str), optional
+      Just a lookup table that converts JPEG dc 'category' value (just the
+      number of bits required to code the actual amplitude), a hex string,
+      into a binary string.
+  fullimg_reshape_params = dictionary, optional
+      If provided, then we reshape the reconstructed patches and the ground
+      truth patches into a full image which we can comute the SSIM on. I
+      don't believe we should be be computing the SSIM on random patches.
+
+  Returns
+  -------
+  rate : float
+      The number of bits per code coefficient, on average
+  distortion : float
+      The Peak Signal to Noise Ratio of the reconstructed patches, after
+      the codes are quantized.
+  codebook : list(ndarray), if precomputed_codebook is None
+      The length s list that gives assignment points for each dimension of the
+      code. The number of assignment points will be variable per dimension.
+  huff_tab_ac : dictionary(str), if precomputed_huff_tab_ac is None
+      Just a lookup table that converts JPEG symbol 1 (which is an 8-bit number
+      represented by its hex string) into a binary string
+  huff_tab_dc : dictionary(str), if precomputed_huff_tab_ac is None
+      Just a lookup table that converts JPEG dc 'category' value (just the
+      number of bits required to code the actual amplitude), a hex string,
+      into a binary string.
+  """
+  assert raw_codes.shape[0] == 64, 'Havent tested on anything other than 8x8'
+  training = True if precomputed_codebook == None else False
+  if training:
+    codebook = []
+  else:
+    codebook = precomputed_codebook
+    huff_tab_runlen = precomputed_huff_tab_runlen
+    huff_tab_ac_val = precomputed_huff_tab_ac_val
+    huff_tab_dc_val = precomputed_huff_tab_dc_val
+
+  all_assignments = np.zeros(raw_codes.T.shape, dtype='int')
+  quantized_codes = np.zeros(raw_codes.T.shape, dtype='float32')
+  for coeff_idx in range(64):
+    if training:
+      apts, assignments, _, _ = uniform_quant.compute_quantization(
+          raw_codes[coeff_idx, :],
+          quant_multiplier*binwidths[coeff_idx],
+          placement_scheme='on_zero')
+      codebook.append(apts)
+      quantized_codes[:, coeff_idx] = apts[assignments]
+    else:
+      quantized, assignments = uniform_quant.quantize(
+          raw_codes[coeff_idx, :], codebook[coeff_idx],
+          return_cluster_assignments=True)
+      quantized_codes[:, coeff_idx] = np.copy(quantized)
+    all_assignments[:, coeff_idx] = assignments
+
+  zero_inds = cbook_inds_of_zero_pts(codebook)
+  if training:
+    print('Generating Huffman tables')
+    huff_tab_runlen, huff_tab_ac_val, huff_tab_dc_val = jpeg.generate_hybrid_ac_dc_huffman_tables(
+        all_assignments, zero_inds)
+
+  # compute the rate
+  num_bits_count = 0
+  for data_pt_idx in range(raw_codes.shape[1]):
+    the_string = jpeg.generate_hybrid_jpg_binary_stream(
+        all_assignments[data_pt_idx], zero_inds, only_get_huffman_symbols=False,
+        huffman_table_runlen=huff_tab_runlen, huffman_table_ac=huff_tab_ac_val, huffman_table_dc=huff_tab_dc_val)
+    num_bits_count += len(the_string)
+  total_num_code_coeffs = (raw_codes.shape[0] * raw_codes.shape[1])
+  rate = num_bits_count / total_num_code_coeffs
+
+  # now the distortion
+  reconstructed_patches = np.dot(quantized_codes, dictionary.T)
+  distortion = {'pSNR': compute_pSNR(target_patches, reconstructed_patches.T),
+                'rMSE': compute_rMSE(target_patches, reconstructed_patches.T)}
+  if fullimg_reshape_params is not None:
+    full_img_gt = image_processing.assemble_image_from_patches(
+        target_patches, fullimg_reshape_params['patch_dim'],
+        fullimg_reshape_params['patch_positions'])
+    full_img_recon = image_processing.assemble_image_from_patches(
+        reconstructed_patches.T, fullimg_reshape_params['patch_dim'],
+        fullimg_reshape_params['patch_positions'])
+    distortion['SSIM'] = compute_ssim(full_img_gt, full_img_recon)
+
+  if training:
+    return rate, distortion, codebook, huff_tab_runlen, huff_tab_ac_val, huff_tab_dc_val
+  else:
+    return rate, distortion
 
 def baseline_compute_RD_point(raw_codes, target_patches, dictionary,
                               quant_multiplier=None, binwidths=None,
