@@ -21,7 +21,7 @@ def compute_pSNR(target, reconstruction):
 
 class TrainingLivePlot(object):
   """
-  A container for a matplotlib plot we'll use to visualize training progress
+  A container for matplotlib plots we'll use to visualize training progress
 
   Parameters
   ----------
@@ -257,6 +257,95 @@ class TrainingLivePlot(object):
       self.bpdn_loss_ax.set_xlim(0, len(self.bpdn_loss_saved))
       plt.pause(0.1)
 
+
+def get_dictionary_tile_imgs(dictionary, image_dims, renormalize):
+  """
+  Arranges a dictionary into a series of imgs that tile elements side by side
+
+  Parameters
+  ----------
+  dictionary : ndarray(float32, size=(n, s))
+      A dictionary, the matrix used in the linear synthesis transform
+  image_dims : tuple(int, int)
+      The dimension of each patch - used to visualize the dictionary elements
+      as an image patch.
+  renormalize : bool
+      If present, renormalize the pixel values for each basis function to the
+      interval [0, 1]. Otherwise they are left on their original scale.
+
+  Returns
+  -------
+  tile_imgs : list(ndarray)
+      Each element is an image to be displayed by imshow
+  tile_img_ranges : list(tuple(float, float))
+      The range that is supposed to be used by imshow when displaying each
+      image. Helps to maintain the right contrast if we didn't renormalize
+      each dictionary element.
+  """
+  max_de_val = np.max(dictionary)
+  min_de_val = np.min(dictionary)
+
+  max_de_per_img = 80*80  # max 80x80 {d}ictionary {e}lements per tile img
+  assert np.sqrt(max_de_per_img) % 1 == 0, 'please pick a square number'
+  num_de = dictionary.shape[1]
+  num_tile_imgs = int(np.ceil(num_de / max_de_per_img))
+  # this determines how many dictionary elements are aranged in a square
+  # grid within any given img
+  if num_tile_imgs > 1:
+    de_per_img = max_de_per_img
+  else:
+    squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_img))+1)]
+    de_per_img = squares[bisect.bisect_left(squares, num_de)]
+  plot_sidelength = int(np.sqrt(de_per_img))
+
+  h_margin = 2
+  w_margin = 2
+  full_img_height = (image_dims[0] * plot_sidelength +
+                     (plot_sidelength - 1) * h_margin)
+  full_img_width = (image_dims[1] * plot_sidelength +
+                    (plot_sidelength - 1) * w_margin)
+
+  de_idx = 0
+  tile_imgs = []
+  tile_img_ranges = []
+  for in_de_img_idx in range(num_tile_imgs):
+    if renormalize:
+      composite_img = np.ones((full_img_height, full_img_width))
+    else:
+      composite_img = max_de_val * np.ones((full_img_height, full_img_width))
+
+    img_de_idx = de_idx % de_per_img
+    while img_de_idx < de_per_img and de_idx < num_de:
+
+      if renormalize:
+        this_de = dictionary[:, de_idx]
+        this_de = this_de - np.min(this_de)
+        this_de = this_de / np.max(this_de)  # now in [0, 1]
+      else:
+        this_de = np.copy(dictionary[:, de_idx])
+
+      # okay, now actually plot the DEs in this tile image
+      row_idx = img_de_idx // plot_sidelength
+      col_idx = img_de_idx % plot_sidelength
+      pxr1 = row_idx * (image_dims[0] + h_margin)
+      pxr2 = pxr1 + image_dims[0]
+      pxc1 = col_idx * (image_dims[1] + w_margin)
+      pxc2 = pxc1 + image_dims[1]
+      composite_img[pxr1:pxr2, pxc1:pxc2] = this_de.reshape((image_dims[0],
+                                                             image_dims[1]))
+
+      img_de_idx += 1
+      de_idx += 1
+
+    min_plot_val = 0. if renormalize else min_de_val
+    max_plot_val = 1. if renormalize else max_de_val
+
+    tile_imgs.append(composite_img)
+    tile_img_ranges.append((min_plot_val, max_plot_val))
+
+  return tile_imgs, tile_img_ranges
+
+
 def display_dictionary(dictionary, image_dims, plot_title="", renormalize=True):
   """
   Plot each of the dictionary elements side by side
@@ -281,73 +370,20 @@ def display_dictionary(dictionary, image_dims, plot_title="", renormalize=True):
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  max_de_val = np.max(dictionary)
-  min_de_val = np.min(dictionary)
-
-  max_de_per_fig = 80*80  # max 80x80 {d}ictionary {e}lements displayed each fig
-  assert np.sqrt(max_de_per_fig) % 1 == 0, 'please pick a square number'
-  num_de = dictionary.shape[1]
-  num_de_figs = int(np.ceil(num_de / max_de_per_fig))
-  # this determines how many dictionary elements are aranged in a square
-  # grid within any given figure
-  if num_de_figs > 1:
-    de_per_fig = max_de_per_fig
-  else:
-    squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_fig))+1)]
-    de_per_fig = squares[bisect.bisect_left(squares, num_de)]
-  plot_sidelength = int(np.sqrt(de_per_fig))
-
-  h_margin = 2
-  w_margin = 2
-  full_img_height = (image_dims[0] * plot_sidelength +
-                     (plot_sidelength - 1) * h_margin)
-  full_img_width = (image_dims[1] * plot_sidelength +
-                    (plot_sidelength - 1) * w_margin)
-
-  de_idx = 0
-  de_figs = []
-  for in_de_fig_idx in range(num_de_figs):
+  t_ims, im_ranges = get_dictionary_tile_imgs(
+      dictionary, image_dims, renormalize=renormalize)
+  fig_refs = []
+  for fig_idx in range(len(t_ims)):
     fig = plt.figure(figsize=(15, 15))
     fig.suptitle(plot_title + ', fig {} of {}'.format(
-                 in_de_fig_idx+1, num_de_figs), fontsize=15)
-
-    if renormalize:
-      composite_img = np.ones((full_img_height, full_img_width))
-    else:
-      composite_img = max_de_val * np.ones((full_img_height, full_img_width))
-
-    fig_de_idx = de_idx % de_per_fig
-    while fig_de_idx < de_per_fig and de_idx < num_de:
-
-      if renormalize:
-        this_de = dictionary[:, de_idx]
-        this_de = this_de - np.min(this_de)
-        this_de = this_de / np.max(this_de)  # now in [0, 1]
-      else:
-        this_de = np.copy(dictionary[:, de_idx])
-
-      # okay, now actually plot the DEs in this figure
-      row_idx = fig_de_idx // plot_sidelength
-      col_idx = fig_de_idx % plot_sidelength
-      pxr1 = row_idx * (image_dims[0] + h_margin)
-      pxr2 = pxr1 + image_dims[0]
-      pxc1 = col_idx * (image_dims[1] + w_margin)
-      pxc2 = pxc1 + image_dims[1]
-      composite_img[pxr1:pxr2, pxc1:pxc2] = this_de.reshape((image_dims[0],
-                                                             image_dims[1]))
-
-      fig_de_idx += 1
-      de_idx += 1
-
-    min_plot_val = 0. if renormalize else min_de_val
-    max_plot_val = 1. if renormalize else max_de_val
-    plt.imshow(composite_img, cmap='Greys_r', vmin=min_plot_val,
-               vmax=max_plot_val, interpolation='nearest')
+                 fig_idx+1, len(t_ims)), fontsize=15)
+    plt.imshow(t_ims[fig_idx], cmap='Greys_r', vmin=im_ranges[fig_idx][0],
+               vmax=im_ranges[fig_idx][1], interpolation='nearest')
     plt.axis('off')
 
-    de_figs.append(fig)
+    fig_refs.append(fig)
 
-  return de_figs
+  return fig_refs
 
 
 def display_codes(codes, plot_title=""):

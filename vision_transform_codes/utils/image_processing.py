@@ -135,7 +135,6 @@ def whiten_center_surround(image, return_filter=False):
   wf = get_whitening_ramp_filter(image.shape)
   combined_filter = wf * lpf
   combined_filter /= np.max(np.abs(combined_filter))
-  print(np.min(np.abs(combined_filter)))
   #^ make the maximum filter magnitude equal to 1
   if return_filter:
     return filter_image(image, combined_filter), combined_filter
@@ -166,6 +165,134 @@ def unwhiten_center_surround(image, orig_filter_DFT=None):
     orig_filter_DFT = wf * lpf
     orig_filter_DFT /= np.max(np.abs(orig_filter_DFT))
   return filter_image(image, 1. / orig_filter_DFT)
+
+
+def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
+  """
+  Uses the principal components transformation to whiten data.
+
+  We have to use a large dataset to estimate the directions of largest variance
+  in vector-valued data, the principal components, and then we normalize the
+  variance of each direction in this space of principal components. This has
+  a similar, *but different* visual affect on images than does the
+  whiten_center_surround transformation.
+
+  Parameters
+  ----------
+  flat_data : ndarray(float32 or uint8, size=(n, D))
+      n is the dimensionality of a single datapoint and D is the size of the
+      dataset to which we are applying the ZCA transform (independently to
+      each sample). We may also be using this dataset to estimate the ZCA
+      whitening transform in the first place.
+  precomputed_ZCA_parameters : dictionary, optional
+      The parameters of a ZCA transform that have already been estimated. If
+      None, we will compute these based on flat_data. Default None.
+      'PCA_basis' : ndarray(float32, size=(n, n))
+        The principal components transform matrix meant to be applied with a
+        left inner product to new data
+      'PCA_axis_variances' : ndarray(float32, size=(n,))
+          The estimated variance of data on each of the n princpal axes.
+      'subtracted_mean' : float32
+          We subtract this from each datapoint to approximately 'zero' the data
+
+  Returns
+  -------
+  whitened_data : ndarray(float32, size=(n, D))
+      The data, now whitened
+  ZCA_parameters : dictionary, if precomputed_ZCA_parameters is None
+      The parameters of a ZCA transform that we estimate from flat_data.
+      'PCA_basis' : ndarray(float32, size=(n, n))
+        The principal components transform matrix meant to be applied with a
+        left inner product to new data
+      'PCA_axis_variances' : ndarray(float32, size=(n,))
+          The estimated variance of data on each of the n princpal axes.
+      'subtracted_mean' : float32
+          We subtract this from each datapoint to approximately 'zero' the data
+  """
+  assert flat_data.dtype in ['float32', 'uint8']
+  # we could do all this in torch using the functionality defined in
+  # ../training/pca.py and ../analysis_transforms/invertible_linear.py, but
+  # I'm trying to make this portable and numpy/pythonic, so we'll do it
+  # manually here
+  num_components = flat_data.shape[0]
+  num_samples = flat_data.shape[1]
+  if precomputed_ZCA_parameters is None:
+    if num_components > 0.1 * num_samples:
+      raise RuntimeError('Number of samples is way too small to estimate PCA')
+    meanzero_flat_data, component_means = center_on_origin(flat_data)
+    U, w, _ = np.linalg.svd(
+        np.dot(meanzero_flat_data, meanzero_flat_data.T) / num_samples,
+        full_matrices=True)
+    # ^way faster to estimate based on the n x n covariance matrix
+    ZCA_parameters = {'PCA_basis': U, 'PCA_axis_variances': w,
+                      'subtracted_mean': np.mean(component_means)}
+    # technically speaking, we should subtract from each component its
+    # specific mean over the dataset. However, when we patch an image, compute
+    # the transform, and then reassemble the patches, using component-specific
+    # means can introduce some blocking artifacts in the reassembled image.
+    # Assuming there's nothing special about particular components, they will
+    # all have approximately the same mean. Instead, I will just subtract the
+    # mean of these means, approximately zeroing the data while reducing the
+    # visual artifacts.
+  else:
+    # shallow copy just creates a reference, not an honest-to-goodness copy
+    ZCA_parameters = precomputed_ZCA_parameters.copy()
+    meanzero_flat_data = flat_data - ZCA_parameters['subtracted_mean']
+
+  meanzero_white_data = np.dot(
+      ZCA_parameters['PCA_basis'],
+      (np.dot(ZCA_parameters['PCA_basis'].T, meanzero_flat_data) /
+       (np.sqrt(ZCA_parameters['PCA_axis_variances']) + 1e-4)[:, None]))
+
+  white_data = (meanzero_white_data.astype('float32') +
+                ZCA_parameters['subtracted_mean'])
+
+  if precomputed_ZCA_parameters is None:
+    return white_data, ZCA_parameters
+  else:
+    return white_data
+
+
+def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
+  """
+  Undoes the ZCA whitening operation (see above)
+
+  Parameters
+  ----------
+  flat_data : ndarray(float32, size=(n, D))
+      n is the dimensionality of a single datapoint and D is the size of the
+      dataset to which we are applying the ZCA transform (independently to
+      each sample). We may also be using this dataset to estimate the ZCA
+      whitening transform in the first place.
+  precomputed_ZCA_parameters : dictionary, optional
+      The parameters of a ZCA transform that have already been estimated. If
+      None, we will compute these based on flat_data. Default None.
+      'PCA_basis' : ndarray(float32, size=(n, n))
+        The principal components transform matrix meant to be applied with a
+        left inner product to new data
+      'PCA_axis_variances' : ndarray(float32, size=(n,))
+          The estimated variance of data on each of the n princpal axes.
+      'subtracted_mean' : float32
+          We subtract this from each datapoint to approximately 'zero' the data
+
+  Returns
+  -------
+  colored_data : ndarray(float32, size=(n, D))
+      The data, with whitening operation undone
+  """
+  assert white_flat_data.dtype == 'float32'
+  meanzero_white_data = (white_flat_data -
+                         precomputed_ZCA_parameters['subtracted_mean'])
+  meanzero_colored_data = np.dot(
+      precomputed_ZCA_parameters['PCA_basis'],
+      (np.dot(precomputed_ZCA_parameters['PCA_basis'].T, meanzero_white_data) *
+       (np.sqrt(precomputed_ZCA_parameters['PCA_axis_variances'])
+        + 1e-4)[:, None]))
+
+  colored_data = (meanzero_colored_data.astype('float32') +
+                  precomputed_ZCA_parameters['subtracted_mean'])
+
+  return colored_data
 
 
 def center_on_origin(flat_data):
