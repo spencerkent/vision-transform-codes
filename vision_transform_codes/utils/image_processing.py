@@ -219,7 +219,7 @@ def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
   if precomputed_ZCA_parameters is None:
     if num_components > 0.1 * num_samples:
       raise RuntimeError('Number of samples is way too small to estimate PCA')
-    meanzero_flat_data, component_means = center_on_origin(flat_data)
+    meanzero_flat_data, component_means = center_each_component(flat_data)
     U, w, _ = np.linalg.svd(
         np.dot(meanzero_flat_data, meanzero_flat_data.T) / num_samples,
         full_matrices=True)
@@ -295,7 +295,7 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
   return colored_data
 
 
-def center_on_origin(flat_data):
+def center_each_component(flat_data):
   """
   Makes each component of data have mean zero across the dataset
 
@@ -318,9 +318,9 @@ def center_on_origin(flat_data):
   return (flat_data - original_means[:, None]).astype('float32'), original_means
 
 
-def subtract_patch_DC(flat_data):
+def center_each_sample(flat_data):
   """
-  Makes each patch have an average illumination of zero
+  Makes each sample have an average value of zero
 
   Parameters
   ----------
@@ -341,7 +341,7 @@ def subtract_patch_DC(flat_data):
   return (flat_data - original_means[None, :]).astype('float32'), original_means
 
 
-def normalize_variance(flat_data):
+def normalize_component_variance(flat_data):
   """
   Normalize each component to have a variance of 1 across the dataset
 
@@ -454,11 +454,16 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
   ----------
   order_of_preproc_ops : list(str)
       Specifies the preprocessing operations to perform on the data. Currently
-      available operations are {'patch', 'center', 'subtract_patch_dc',
-      'normalize_variance', 'whiten_center_surround', 'shift_by_constant'}.
+      available operations are
+      ----
+      {'whiten_center_surround', 'whiten_ZCA', 'patch',
+       'center_each_component', 'center_each_patch',
+       'normalize_component_variance', 'divide_by_constant',
+       'shift_by_constant'}.
+      ----
       Example: (we want to perform Bruno's whitening in the fourier domain and
                 also have the components of each patch have zero mean)
-          ['whiten_center_surround', 'patch', 'zero_mean']
+          ['whiten_center_surround', 'patch', 'center_each_component']
   patch_dimensions : tuple(int, int)
       The size in pixels of each patch
   batch_size : int
@@ -477,6 +482,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       exclude from the training set.
       'filepath' : str
       'exclude' : list(int)
+      'div_constant': float (only checked if divide_by_constant preproc)
       'shift_constant': float (only checked if shift_by_constant preproc)
 
   Returns
@@ -486,15 +492,19 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
         The patches training set where k=num_batches,
         n=patch_dimensions[0]*patch_dimensions[1], and b=batch_size. These are
         patches ready to be sent to the gpu and consumed in PyTorch
-    'orignal_patch_means' : ndarray(float32, size=(n,)), optional
-        If 'centering' was requested as a preprocessing step we return the
-        original patch means so that future data can be processed using this
-        same exact centering
-    'orignal_patch_variances' : ndarray(float32, size=(n,)), optional
-        If 'normalize_variance' was requested as a preprocessing step we return
-        the original patch variances so that future data can be processed using
-        this same exact normalization
+    --- OPTIONAL RETURNS ---
+    'original_component_means' : ndarray(float32, size=(n,)), optional
+        If 'center_each_component' was requested as a preprocessing step we
+        return the original component means so that future data can be
+        processed using this same exact centering
+    'original_component_variances' : ndarray(float32, size=(n,)), optional
+        If 'normalize_component_variance' was requested as a preprocessing step
+        we return the original variances so that future data can be processed
+        using this same exact normalization
+    'ZCA_parameters : dictionary, optional
+        See whiten_ZCA() above.
   """
+  assert 'patch' in order_of_preproc_ops
   # our convention is that the first axis indexes images
   if dataset == 'Field_NW_whitened':
     # data is stored as a .mat file
@@ -529,11 +539,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
   already_patched_flag = False
   for preproc_op in order_of_preproc_ops:
 
-    if preproc_op == 'whiten_center_surround':
-      for img_idx in range(len(p_imgs)):
-        p_imgs[img_idx] = whiten_center_surround(p_imgs[img_idx])
-
-    elif preproc_op == 'patch':
+    if preproc_op == 'patch':
       max_vert_pos = []
       min_vert_pos = []
       max_horz_pos = []
@@ -569,23 +575,56 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       print('Done.')
       already_patched_flag = True
 
-    elif preproc_op == 'shift_by_constant':
-      all_patches = all_patches + datasetparams['shift_constant']
+    elif preproc_op == 'whiten_center_surround':
+      if already_patched_flag:
+        raise KeyError('We typically preform this type of whitening before ' +
+                       'patching the images')
+      for img_idx in range(len(p_imgs)):
+        p_imgs[img_idx] = whiten_center_surround(p_imgs[img_idx])
 
-    elif preproc_op == 'center':
+    elif preproc_op == 'whiten_ZCA':
+      print('Before I did ZCA whitening the min and max were: ')
+      print(np.min(np.min(all_patches)))
+      print(np.min(np.max(all_patches)))
       if not already_patched_flag:
-        raise KeyError('You ought to patch the data before trying to center it')
-      all_patches, component_means = center_on_origin(all_patches)
+        raise KeyError('You ought to patch image before trying to compute a ' +
+                       'ZCA whitening transform')
+      all_patches, computed_ZCA_params = whiten_ZCA(all_patches)
+      print('After I did ZCA whitening the min and max were: ')
+      print(np.min(np.min(all_patches)))
+      print(np.min(np.max(all_patches)))
 
-    elif preproc_op == 'normalize_variance':
+    elif preproc_op == 'divide_by_constant':
+      if already_patched_flag:
+        all_patches = all_patches / datasetparams['div_constant']
+      else:
+        # likely use case is to do this before whitening and patching
+        for img_idx in range(len(p_imgs)):
+          p_imgs[img_idx] = p_imgs[img_idx] / datasetparams['div_constant']
+
+    elif preproc_op == 'shift_by_constant':
+      if already_patched_flag:
+        all_patches = all_patches + datasetparams['shift_constant']
+      else:
+        for img_idx in range(len(p_imgs)):
+          p_imgs[img_idx] = p_imgs[img_idx] + datasetparams['shift_constant']
+
+    elif preproc_op == 'center_each_component':
+      if not already_patched_flag:
+        raise KeyError('You ought to patch the data before trying to ' +
+                       'center each component')
+      all_patches, component_means = center_each_component(all_patches)
+
+    elif preproc_op == 'normalize_component_variance':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before normalizing it')
-      all_patches, orig_variances = normalize_variance(all_patches)
+      all_patches, orig_variances = normalize_component_variance(all_patches)
 
-    elif preproc_op == 'subtract_patch_dc':
+    elif preproc_op == 'center_each_patch':
       if not already_patched_flag:
-        raise KeyError('You ought to patch the data before trying to sub DC')
-      all_patches, patch_means = subtract_patch_DC(all_patches)
+        raise KeyError('You ought to patch the data before trying to ' +
+                       'center each patch')
+      all_patches, _ = center_each_sample(all_patches)
 
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)
@@ -594,11 +633,11 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
   return_dict = {'batched_patches': all_patches.T.reshape(
                     (num_batches, batch_size, -1)).transpose((0, 2, 1))}
                  #^ size=(k, n, b)
-  if 'center' in order_of_preproc_ops:
+  if 'center_each_component' in order_of_preproc_ops:
     return_dict['original_component_means'] = component_means
-  if 'subtract_patch_dc' in order_of_preproc_ops:
-    return_dict['original_patch_means'] = patch_means
-  if 'normalize_variance' in order_of_preproc_ops:
-    return_dict['original_patch_variances'] = orig_variances
+  if 'normalize_component_variance' in order_of_preproc_ops:
+    return_dict['original_component_variances'] = orig_variances
+  if 'whiten_ZCA' in order_of_preproc_ops:
+    return_dict['ZCA_parameters'] = computed_ZCA_params
 
   return return_dict

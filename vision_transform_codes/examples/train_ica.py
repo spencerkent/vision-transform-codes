@@ -61,7 +61,7 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 patch_dataset = create_patch_training_set(
-    ['whiten_center_surround', 'patch', 'center'],
+    ['whiten_center_surround', 'patch', 'center_each_component'],
     (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
