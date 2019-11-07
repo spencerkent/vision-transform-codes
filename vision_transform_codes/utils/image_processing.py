@@ -583,16 +583,10 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
         p_imgs[img_idx] = whiten_center_surround(p_imgs[img_idx])
 
     elif preproc_op == 'whiten_ZCA':
-      print('Before I did ZCA whitening the min and max were: ')
-      print(np.min(np.min(all_patches)))
-      print(np.min(np.max(all_patches)))
       if not already_patched_flag:
         raise KeyError('You ought to patch image before trying to compute a ' +
                        'ZCA whitening transform')
       all_patches, computed_ZCA_params = whiten_ZCA(all_patches)
-      print('After I did ZCA whitening the min and max were: ')
-      print(np.min(np.min(all_patches)))
-      print(np.min(np.max(all_patches)))
 
     elif preproc_op == 'divide_by_constant':
       if already_patched_flag:
