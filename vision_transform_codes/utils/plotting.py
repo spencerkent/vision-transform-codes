@@ -408,7 +408,6 @@ def display_codes(codes, plot_title=""):
   num_codes = codes.shape[1]
   max_data_pt_per_fig = 40
   num_code_figs = int(np.ceil(num_codes / max_data_pt_per_fig))
-  print(num_code_figs)
   if num_code_figs > 1:
     data_pt_per_fig = max_data_pt_per_fig
   else:
