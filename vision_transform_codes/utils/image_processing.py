@@ -9,6 +9,8 @@ strategies on images. Just leaving a few relevant references:
        37(23), 3311-3325.
 """
 import numpy as np
+from scipy.signal import convolve2d
+from matplotlib import pyplot as plt
 
 def get_low_pass_filter(DFT_num_samples, filter_parameters):
   """
@@ -302,6 +304,90 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
                   precomputed_ZCA_parameters['subtracted_mean'])
 
   return colored_data
+
+
+def local_contrast_nomalization(image, kernel_size, return_normalizer=False):
+  """
+  Computes an estimate of the local contrast and removes this from an image
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      An image of height h and width w, with c color channels
+  kernel_size : tuple(int, int)
+      The size of the gaussian kernel used
+  return_normalizer : bool, optional
+      If true, return the array used to do the normalization -- this can be
+      used to reverse the transform. Defualt False.
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  normalizer : ndarray(float32, size=(h, w, c))
+  """
+  v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
+                       int(np.ceil(kernel_size[0]/2)))
+  h_coords = np.arange(-int(np.floor(kernel_size[1]/2)),
+                       int(np.ceil(kernel_size[1]/2)))
+  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
+  g_variance = np.floor(max(kernel_size[0], kernel_size[1])/2)**2
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
+  gaussian_kernel /= np.sum(gaussian_kernel)
+
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  local_variance = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    local_variance[:, :, color_channel] = convolve2d(
+        image[:, :, color_channel]**2, gaussian_kernel, 'same')
+    filtered_image[:, :, color_channel] = (image[:, :, color_channel] /
+        np.sqrt(local_variance[:, :, color_channel]))
+
+  if return_normalizer:
+    return filtered_image, np.sqrt(local_variance)
+  else:
+    return filtered_image
+
+
+def local_luminance_subtraction(image, kernel_size, return_subtractor=False):
+  """
+  Computes an estimate of the local luminance and removes this from an image
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      An image of height h and width w, with c color channels
+  kernel_size : tuple(int, int)
+      The size of the gaussian kernel used
+  return_subtractor : bool, optional
+      If true, return the array used to do the luminance subtraction -- this
+      can be used to reverse the transform. Defualt False.
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  subtractor : ndarray(float32, size=(h, w, c))
+  """
+  v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
+                       int(np.ceil(kernel_size[0]/2)))
+  h_coords = np.arange(-int(np.floor(kernel_size[1]/2)),
+                       int(np.ceil(kernel_size[1]/2)))
+  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
+  g_variance = np.floor(max(kernel_size[0], kernel_size[1])/2)**2
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
+  gaussian_kernel /= np.sum(gaussian_kernel)
+
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  local_luminance = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    local_luminance[:, :, color_channel] = convolve2d(
+        image[:, :, color_channel], gaussian_kernel, 'same')
+    filtered_image[:, :, color_channel] = (image[:, :, color_channel] -
+        local_luminance[:, :, color_channel])
+
+  if return_subtractor:
+    return filtered_image, local_luminance
+  else:
+    return filtered_image
 
 
 def center_each_component(flat_data):

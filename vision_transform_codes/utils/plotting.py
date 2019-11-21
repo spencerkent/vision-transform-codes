@@ -16,7 +16,10 @@ tab10colors = plt.get_cmap('tab10').colors
 def compute_pSNR(target, reconstruction):
   signal_magnitude = np.max(target) - np.min(target)
   MSE = np.mean(np.square(target - reconstruction))
-  return 10. * np.log10((signal_magnitude**2)/MSE)
+  if MSE != 0:
+    return 10. * np.log10((signal_magnitude**2)/MSE)
+  else:
+    return np.inf
 
 
 class TrainingLivePlot(object):
