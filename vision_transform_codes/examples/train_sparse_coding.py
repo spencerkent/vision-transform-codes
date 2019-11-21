@@ -17,7 +17,7 @@ import torch
 
 from training.sparse_coding import train_dictionary as sc_train
 from utils.plotting import TrainingLivePlot
-from utils.image_processing import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set
 
 RUN_IDENTIFIER = 'test_sparse_coding'
 

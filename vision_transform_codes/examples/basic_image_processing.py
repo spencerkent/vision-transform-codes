@@ -14,6 +14,7 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import utils.image_processing as im_proc
+import utils.dataset_generation as dset_generation
 import utils.plotting as plot_utils
 
 def main():
@@ -33,27 +34,30 @@ def main():
   # Low-pass filter an image
   ##########################
   orig_img = unprocessed_images[4]  # arbitrary
-  dft_num_samples = orig_img.shape
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  dft_num_samples = orig_img.shape[:2]
   lpf = im_proc.get_low_pass_filter(
       dft_num_samples, {'shape': 'exponential', 'cutoff': 0.1, 'order': 4.0})
   lpf_img = im_proc.filter_image(orig_img, lpf)
   orig_img_recovered = im_proc.filter_image(lpf_img, 1./lpf)
   # A little visualization
-  visualize_lp_filtering(orig_img, lpf_img, lpf,
-                         orig_img_recovered, dft_num_samples)
+  visualize_lp_filtering(np.squeeze(orig_img), np.squeeze(lpf_img), lpf,
+                         np.squeeze(orig_img_recovered), dft_num_samples)
 
   ################################################
   # Whiten with 'Atick and Redlich' whitening, the
   # whitening originally used in sparse coding
   ################################################
   orig_img = unprocessed_images[4]  # arbitrary
-  dft_num_samples = orig_img.shape
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  dft_num_samples = orig_img.shape[:2]
   white_img, white_filt = im_proc.whiten_center_surround(
       orig_img, return_filter=True)
   orig_img_recovered = im_proc.unwhiten_center_surround(white_img, white_filt)
   # A little visualization
-  visualize_AR_whitening(orig_img, white_img, white_filt,
-                         orig_img_recovered, dft_num_samples)
+  visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+                         white_filt, np.squeeze(orig_img_recovered),
+                         dft_num_samples)
 
   #############################
   # Whiten with 'ZCA' whitening
@@ -62,7 +66,7 @@ def main():
   # it for 8x8 patches. Rather than whitening whole images, we just whiten
   # patches and then we can go back and reassemble the image.
   print('Creating a dataset of patches')
-  one_mil_image_patches = im_proc.create_patch_training_set(
+  one_mil_image_patches = dset_generation.create_patch_training_set(
       ['patch'], (8, 8),
       1000000, 1, edge_buffer=5, dataset='Kodak',
       datasetparams={'filepath': raw_data_filepath,
@@ -72,6 +76,7 @@ def main():
 
   print('Applying transform to test image')
   orig_img = unprocessed_images[4]  # arbitrary
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
   orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
       orig_img, (8, 8))
   white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
@@ -81,7 +86,8 @@ def main():
   orig_img_recovered = im_proc.assemble_image_from_patches(
       orig_img_recovered_patches, (8, 8), orig_img_patch_pos)
   # A little visualization
-  visualize_ZCA_whitening(orig_img, white_img, ZCA_params, orig_img_recovered)
+  visualize_ZCA_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+                          ZCA_params, np.squeeze(orig_img_recovered))
 
 
 

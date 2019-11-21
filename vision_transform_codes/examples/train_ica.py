@@ -16,7 +16,7 @@ import torch
 
 from training.ica import train_dictionary as ica_train
 from utils.plotting import TrainingLivePlot
-from utils.image_processing import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set
 
 RUN_IDENTIFIER = 'test_ICA'
 
