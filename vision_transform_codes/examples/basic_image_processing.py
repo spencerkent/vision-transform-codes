@@ -30,20 +30,20 @@ def main():
   else:
     raise KeyError('not implemented, ' +
                    'see create_patch_training_set in utils/image_processing.py')
-  # ##########################
-  # # Low-pass filter an image
-  # ##########################
-  # orig_img = unprocessed_images[4]  # arbitrary
-  # orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
-  # dft_num_samples = orig_img.shape[:2]
-  # lpf = im_proc.get_low_pass_filter(
-  #     dft_num_samples, {'shape': 'exponential', 'cutoff': 0.1, 'order': 4.0})
-  # lpf_img = im_proc.filter_image(orig_img, lpf)
-  # orig_img_recovered = im_proc.filter_image(lpf_img, 1./lpf)
-  # # A little visualization
-  # visualize_lp_filtering(np.squeeze(orig_img), np.squeeze(lpf_img), lpf,
-  #                        np.squeeze(orig_img_recovered), dft_num_samples)
-  #
+  ##########################
+  # Low-pass filter an image
+  ##########################
+  orig_img = unprocessed_images[4]  # arbitrary
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  dft_num_samples = orig_img.shape[:2]
+  lpf = im_proc.get_low_pass_filter(
+      dft_num_samples, {'shape': 'exponential', 'cutoff': 0.1, 'order': 4.0})
+  lpf_img = im_proc.filter_image(orig_img, lpf)
+  orig_img_recovered = im_proc.filter_image(lpf_img, 1./lpf)
+  # A little visualization
+  visualize_lp_filtering(np.squeeze(orig_img), np.squeeze(lpf_img), lpf,
+                         np.squeeze(orig_img_recovered), dft_num_samples)
+
   ################################################
   # Whiten with 'Atick and Redlich' whitening, the
   # whitening originally used in sparse coding
@@ -58,36 +58,36 @@ def main():
   visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
                          white_filt, np.squeeze(orig_img_recovered),
                          dft_num_samples)
-  #
-  # #############################
-  # # Whiten with 'ZCA' whitening
-  # #############################
-  # # we have to estimate the ZCA_transform on a large batch of data, and we do
-  # # it for 8x8 patches. Rather than whitening whole images, we just whiten
-  # # patches and then we can go back and reassemble the image.
-  # print('Creating a dataset of patches')
-  # one_mil_image_patches = dset_generation.create_patch_training_set(
-  #     ['patch'], (8, 8),
-  #     1000000, 1, edge_buffer=5, dataset='Kodak',
-  #     datasetparams={'filepath': raw_data_filepath,
-  #                    'exclude': []})['batched_patches'][0]
-  # print('Estimating the ZCA transform parameters based on this data')
-  # _, ZCA_params = im_proc.whiten_ZCA(one_mil_image_patches)
-  #
-  # print('Applying transform to test image')
-  # orig_img = unprocessed_images[4]  # arbitrary
-  # orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
-  # orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
-  #     orig_img, (8, 8))
-  # white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
-  # white_img = im_proc.assemble_image_from_patches(
-  #     white_patches, (8, 8), orig_img_patch_pos)
-  # orig_img_recovered_patches = im_proc.unwhiten_ZCA(white_patches, ZCA_params)
-  # orig_img_recovered = im_proc.assemble_image_from_patches(
-  #     orig_img_recovered_patches, (8, 8), orig_img_patch_pos)
-  # # A little visualization
-  # visualize_ZCA_whitening(np.squeeze(orig_img), np.squeeze(white_img),
-  #                         ZCA_params, np.squeeze(orig_img_recovered))
+
+  #############################
+  # Whiten with 'ZCA' whitening
+  #############################
+  # we have to estimate the ZCA_transform on a large batch of data, and we do
+  # it for 8x8 patches. Rather than whitening whole images, we just whiten
+  # patches and then we can go back and reassemble the image.
+  print('Creating a dataset of patches')
+  one_mil_image_patches = dset_generation.create_patch_training_set(
+      ['patch'], (8, 8),
+      1000000, 1, edge_buffer=5, dataset='Kodak',
+      datasetparams={'filepath': raw_data_filepath,
+                     'exclude': []})['batched_patches'][0]
+  print('Estimating the ZCA transform parameters based on this data')
+  _, ZCA_params = im_proc.whiten_ZCA(one_mil_image_patches)
+
+  print('Applying transform to test image')
+  orig_img = unprocessed_images[4]  # arbitrary
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
+      orig_img, (8, 8))
+  white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
+  white_img = im_proc.assemble_image_from_patches(
+      white_patches, (8, 8), orig_img_patch_pos)
+  orig_img_recovered_patches = im_proc.unwhiten_ZCA(white_patches, ZCA_params)
+  orig_img_recovered = im_proc.assemble_image_from_patches(
+      orig_img_recovered_patches, (8, 8), orig_img_patch_pos)
+  # A little visualization
+  visualize_ZCA_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+                          ZCA_params, np.squeeze(orig_img_recovered))
 
 
   ##############################
