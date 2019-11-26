@@ -24,7 +24,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       {'whiten_center_surround', 'whiten_ZCA', 'patch',
        'center_each_component', 'center_each_patch',
        'normalize_component_variance', 'divide_by_constant',
-       'shift_by_constant'}.
+       'shift_by_constant', 'local_contrast_nomalization'}.
       ----
       Example: (we want to perform Bruno's whitening in the fourier domain and
                 also have the components of each patch have zero mean)
@@ -40,7 +40,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       patches.
   dataset : str
       The name of the dataset to grab patches from. Currently one of
-      {'Field_NW_unwhitened', 'Field_NW_whitened', 'vanHateren', 'Kodak'}.
+      {'Field_NW', 'vanHateren', 'Kodak'}.
   datasetparams : dictionary
       A dictionary of parameters that may be specific to the dataset. Currently
       just specifies the filepath of the data file and which images to
@@ -71,36 +71,33 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
   """
   assert 'patch' in order_of_preproc_ops
   # our convention is that the first axis indexes images
-  if dataset == 'Field_NW_whitened':
-    # data is stored as a .mat file
-    unprocessed_images = scipy.io.loadmat(
-      datasetparams['filepath'])['IMAGES'].astype('float32')
-    temp = np.transpose(unprocessed_images, (2, 0, 1))
-    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
-  elif dataset == 'Field_NW_unwhitened':
+  if dataset == 'Field_NW':
     unprocessed_images = scipy.io.loadmat(
       datasetparams['filepath'])['IMAGESr'].astype('float32')
     temp = np.transpose(unprocessed_images, (2, 0, 1))
-    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
+    unprocessed_images = [temp[x][:, :, None] for x in range(temp.shape[0])]
   elif dataset == 'vanHateren':
     # this dataset is MUCH larger so it will take some time to load into memory
     with h5py.File(datasetparams['filepath']) as file_handle:
-      temp = np.array(file_handle['van_hateren_good'],
-                                    dtype='float32')
-    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
+      temp = np.array(file_handle['van_hateren_good'], dtype='float32')
+    unprocessed_images = [temp[x][:, :, None] for x in range(temp.shape[0])]
     #^ maximum pixel value is 1.0, but minimum value is NOT 0.0, more like 0.4
-  elif dataset == 'Kodak':
+  elif dataset == 'Kodak_BW':
     unprocessed_images = pickle.load(open(datasetparams['filepath'], 'rb'))
     # this is a list of images, so that each image can be EITHER
     # 752x496 or 496x752, whichever makes it upright
-    unprocessed_images = [x.astype('float32') for x in unprocessed_images]
+    unprocessed_images = [x.astype('float32')[:, :, None] 
+                          for x in unprocessed_images]
     #^ these should be float32 for further processing...
+  elif dataset == 'Kodak':
+    raise NotImplementedError('This is next')
   else:
     raise KeyError('Unrecognized dataset ' + dataset)
   eligible_image_inds = np.array([x for x in range(len(unprocessed_images))
                                   if x not in datasetparams['exclude']])
 
   p_imgs = [unprocessed_images[x] for x in eligible_image_inds]
+  num_color_channels = p_imgs[0].shape[2]
   already_patched_flag = False
   for preproc_op in order_of_preproc_ops:
 
@@ -119,8 +116,8 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       num_imgs = len(p_imgs)
 
       all_patches = np.zeros(
-        [patch_dimensions[0]*patch_dimensions[1], num_batches*batch_size],
-        dtype='float32')
+        [patch_dimensions[0]*patch_dimensions[1]*num_color_channels,
+         num_batches*batch_size], dtype='float32')
 
       p_idx = 0
       for batch_idx in range(num_batches):
@@ -133,7 +130,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
           all_patches[:, p_idx] = p_imgs[img_idx][
             vert_pos:vert_pos+patch_dimensions[0],
             horz_pos:horz_pos+patch_dimensions[1]].reshape(
-                [patch_dimensions[0]*patch_dimensions[1]])
+                [patch_dimensions[0]*patch_dimensions[1]*num_color_channels])
           p_idx += 1
         if batch_idx % 1000 == 0 and batch_idx != 0:
           print('Finished creating', batch_idx, 'batches')
@@ -152,6 +149,14 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
         raise KeyError('You ought to patch image before trying to compute a ' +
                        'ZCA whitening transform')
       all_patches, computed_ZCA_params = ip_util.whiten_ZCA(all_patches)
+
+    elif preproc_op == 'local_contrast_normalization':
+      if already_patched_flag:
+        raise KeyError('We typically preform this before ' +
+                       'patching the images')
+      for img_idx in range(len(p_imgs)):
+        p_imgs[img_idx] = ip_util.local_contrast_nomalization(
+            p_imgs[img_idx], kernel_size=datasetparams['lcn_kernel_sz'])
 
     elif preproc_op == 'divide_by_constant':
       if already_patched_flag:
