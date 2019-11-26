@@ -113,16 +113,16 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
   # let's only import the things we need
   if code_inf_alg == 'ista':
-    from analysis_transforms import ista
+    from analysis_transforms import ista as inference_alg
   elif code_inf_alg == 'fista':
-    from analysis_transforms import fista
+    from analysis_transforms import fista as inference_alg
   else:
     raise KeyError('Unrecognized code inference algorithm: ' + code_inf_alg)
 
   if dict_update_alg == 'sc_steepest_descent':
-    from dict_update_rules import sc_steepest_descent
+    from dict_update_rules import sc_steepest_descent as dict_update
   elif dict_update_alg == 'sc_cheap_quadratic_descent':
-    from dict_update_rules import sc_cheap_quadratic_descent
+    from dict_update_rules import sc_cheap_quadratic_descent as dict_update
     hessian_diag = init_dictionary.new_zeros(init_dictionary.size(1))
     #^ we'll compute a 'smoothed' version of this at every iteration
   else:
@@ -156,14 +156,10 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       # check to see if we need to set/update inference parameters
       if total_iter_idx in inf_param_schedule:
         sparsity_weight = inf_param_schedule[total_iter_idx]['sparsity_weight']
-        inf_max_num_iters = inf_param_schedule[total_iter_idx]['max_num_iters']
+        inf_num_iters = inf_param_schedule[total_iter_idx]['num_iters']
 
-      if code_inf_alg == 'ista':
-        codes = ista.run(batch_images, dictionary, sparsity_weight,
-                         inf_max_num_iters, nonnegative_only=nonneg_only)
-      elif code_inf_alg == 'fista':
-        codes = fista.run(batch_images, dictionary, sparsity_weight,
-                          inf_max_num_iters, nonnegative_only=nonneg_only)
+      codes = inference_alg.run(batch_images, dictionary, sparsity_weight,
+                                inf_num_iters, nonnegative_only=nonneg_only)
 
       # check to see if we need to checkpoint the model or plot something
       if (ckpt_sched is not None and total_iter_idx in ckpt_sched):
@@ -196,14 +192,13 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         d_upd_stp= dict_update_param_schedule[total_iter_idx]['stepsize']
         d_upd_niters = dict_update_param_schedule[total_iter_idx]['num_iters']
       if dict_update_alg == 'sc_steepest_descent':
-        sc_steepest_descent.run(batch_images, dictionary, codes,
-                                d_upd_stp, d_upd_niters)
+        dict_update.run(batch_images, dictionary, codes,
+                        d_upd_stp, d_upd_niters)
       elif dict_update_alg == 'sc_cheap_quadratic_descent':
         hessian_diag = (hessian_diag.mul_(0.99) +
                         torch.pow(codes, 2).mean(1)/100)  # credit Yubei Chen
-        sc_cheap_quadratic_descent.run(batch_images, dictionary, codes,
-                                       hessian_diag, stepsize=d_upd_stp,
-                                       num_iters=d_upd_niters)
+        dict_update.run(batch_images, dictionary, codes, hessian_diag,
+                        stepsize=d_upd_stp, num_iters=d_upd_niters)
       total_iter_idx += 1
 
     # we need to reshuffle the batches if we're not using a DataLoader
@@ -217,4 +212,4 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     print("Epoch", epoch_idx, "finished")
     # let's make sure we release any unreferenced tensor to make their memory
     # visible to the OS
-    torch.cuda.empty_cache() # Sep17, 2019: This may no longer be needed
+    torch.cuda.empty_cache() # Sep 17, 2019: This may no longer be needed
