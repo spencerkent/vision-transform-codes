@@ -1,11 +1,7 @@
 """
 Demonstrates using the DCT and spitting out JPEG source codes
 """
-import sys
-import os
-examples_fullpath = os.path.dirname(os.path.abspath(__file__))
-toplevel_dir_fullpath = examples_fullpath[:examples_fullpath.rfind('/')+1]
-sys.path.insert(0, toplevel_dir_fullpath)
+import _set_the_path
 
 import argparse
 import pickle
