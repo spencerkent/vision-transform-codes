@@ -15,7 +15,7 @@ import torch
 
 from training.pca import train_dictionary as pca_train
 from analysis_transforms import invertible_linear
-from utils.image_processing import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set
 from utils.plotting import TrainingLivePlot
 from utils.plotting import display_dictionary
 
@@ -31,7 +31,7 @@ CODE_SIZE = PATCH_HEIGHT * PATCH_WIDTH
 parser = argparse.ArgumentParser()
 parser.add_argument("data_id",
     help="Name of the dataset (currently allowable: " +
-         "Field_NW_whitened, Field_NW_unwhitened, vanHateren)")
+         "Field_NW, vanHateren, Kodak)")
 parser.add_argument("data_filepath", help="The full path to dataset on disk")
 script_args = parser.parse_args()
 

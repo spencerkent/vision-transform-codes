@@ -14,7 +14,9 @@ from matplotlib import pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 import utils.image_processing as im_proc
+import utils.dataset_generation as dset_generation
 import utils.plotting as plot_utils
+from utils.misc import rotational_average
 
 def main():
   # we'll just show this on Kodak images, you can change this as you see fit
@@ -28,32 +30,34 @@ def main():
   else:
     raise KeyError('not implemented, ' +
                    'see create_patch_training_set in utils/image_processing.py')
-
   ##########################
   # Low-pass filter an image
   ##########################
   orig_img = unprocessed_images[4]  # arbitrary
-  dft_num_samples = orig_img.shape
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  dft_num_samples = orig_img.shape[:2]
   lpf = im_proc.get_low_pass_filter(
       dft_num_samples, {'shape': 'exponential', 'cutoff': 0.1, 'order': 4.0})
   lpf_img = im_proc.filter_image(orig_img, lpf)
   orig_img_recovered = im_proc.filter_image(lpf_img, 1./lpf)
   # A little visualization
-  visualize_lp_filtering(orig_img, lpf_img, lpf,
-                         orig_img_recovered, dft_num_samples)
+  visualize_lp_filtering(np.squeeze(orig_img), np.squeeze(lpf_img), lpf,
+                         np.squeeze(orig_img_recovered), dft_num_samples)
 
   ################################################
   # Whiten with 'Atick and Redlich' whitening, the
   # whitening originally used in sparse coding
   ################################################
   orig_img = unprocessed_images[4]  # arbitrary
-  dft_num_samples = orig_img.shape
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  dft_num_samples = orig_img.shape[:2]
   white_img, white_filt = im_proc.whiten_center_surround(
       orig_img, return_filter=True)
   orig_img_recovered = im_proc.unwhiten_center_surround(white_img, white_filt)
   # A little visualization
-  visualize_AR_whitening(orig_img, white_img, white_filt,
-                         orig_img_recovered, dft_num_samples)
+  visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+                         white_filt, np.squeeze(orig_img_recovered),
+                         dft_num_samples)
 
   #############################
   # Whiten with 'ZCA' whitening
@@ -62,7 +66,7 @@ def main():
   # it for 8x8 patches. Rather than whitening whole images, we just whiten
   # patches and then we can go back and reassemble the image.
   print('Creating a dataset of patches')
-  one_mil_image_patches = im_proc.create_patch_training_set(
+  one_mil_image_patches = dset_generation.create_patch_training_set(
       ['patch'], (8, 8),
       1000000, 1, edge_buffer=5, dataset='Kodak',
       datasetparams={'filepath': raw_data_filepath,
@@ -72,6 +76,7 @@ def main():
 
   print('Applying transform to test image')
   orig_img = unprocessed_images[4]  # arbitrary
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
   orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
       orig_img, (8, 8))
   white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
@@ -81,20 +86,50 @@ def main():
   orig_img_recovered = im_proc.assemble_image_from_patches(
       orig_img_recovered_patches, (8, 8), orig_img_patch_pos)
   # A little visualization
-  visualize_ZCA_whitening(orig_img, white_img, ZCA_params, orig_img_recovered)
+  visualize_ZCA_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+                          ZCA_params, np.squeeze(orig_img_recovered))
 
+
+  ##############################
+  # Local contrast normalization
+  ##############################
+  orig_img = unprocessed_images[4]  # arbitrary
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  normalized_img, normalizer = im_proc.local_contrast_nomalization(
+      orig_img, (17, 17), return_normalizer=True)
+  orig_img_recovered = normalized_img * normalizer
+  visualize_lcn(np.squeeze(orig_img), np.squeeze(normalized_img),
+                np.squeeze(normalizer), np.squeeze(orig_img_recovered))
+
+
+  #############################
+  # Local luminance subtraction
+  #############################
+  orig_img = unprocessed_images[4]  # arbitrary
+  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  centered_img, subtractor = im_proc.local_luminance_subtraction(
+      orig_img, (17, 17), return_subtractor=True)
+  orig_img_recovered = centered_img + subtractor
+  visualize_lls(np.squeeze(orig_img), np.squeeze(centered_img),
+                np.squeeze(subtractor), np.squeeze(orig_img_recovered))
 
 
   plt.show()
 
 
-
 def visualize_lp_filtering(o_img, lp_img, lpf_filt,
                            o_img_recovered, dft_nsamps):
-  fig = plt.figure(figsize=(15, 8), dpi=100)
+  tall_skinny = o_img.shape[0] > o_img.shape[1]
+  if tall_skinny:
+    fig = plt.figure(figsize=(15, 15), dpi=100)
+    sp_colwidths = [1, 1, 1, 1]
+    sp_rowheights = [6, 3, 2]
+  else:
+    fig = plt.figure(figsize=(15, 8), dpi=100)
+    sp_colwidths = [1, 1, 1, 1]
+    sp_rowheights = [4, 2, 2]
   fig.suptitle('Low-pass filtering', fontsize=12)
-  sp_colwidths = [1, 1, 1, 1]
-  sp_rowheights = [4, 2, 2]
+
   gridspec = fig.add_gridspec(ncols=4, nrows=3, width_ratios=sp_colwidths,
                               height_ratios=sp_rowheights)
 
@@ -123,10 +158,13 @@ def visualize_lp_filtering(o_img, lp_img, lpf_filt,
   ax = fig.add_subplot(gridspec[1, 0])
   ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
   orig_dft_im = ax.imshow(
-      np.fft.fftshift(np.log(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
-  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  if tall_skinny:
+    cax = divider.append_axes("right", size="5%", pad=0.1)
+  else:
+    cax = divider.append_axes("right", size="5%", pad=-0.2)
   plt.colorbar(orig_dft_im, cax=cax)
   ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
   ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
@@ -134,45 +172,37 @@ def visualize_lp_filtering(o_img, lp_img, lpf_filt,
   ax.set_xticklabels(['-0.5', '0.0', '0.5'])
 
   ax = fig.add_subplot(gridspec[1, 1])
-  ax.set_title('(log) magnitude of 2D DFT\nlp-filtered image', fontsize=10)
+  ax.set_title('(log) magnitude of 2D DFT\nlow-pass image', fontsize=10)
   lp_dft_im = ax.imshow(
-      np.fft.fftshift(np.log(np.abs(np.fft.fft2(lp_img, dft_nsamps)))),
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(lp_img, dft_nsamps)))),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
-  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  if tall_skinny:
+    cax = divider.append_axes("right", size="5%", pad=0.1)
+  else:
+    cax = divider.append_axes("right", size="5%", pad=-0.2)
   plt.colorbar(lp_dft_im, cax=cax)
   ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
   ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
   ax.set_yticklabels(['-0.5', '0.0', '0.5'])
   ax.set_xticklabels(['-0.5', '0.0', '0.5'])
 
-  ax = fig.add_subplot(gridspec[2, 0])
-  ax.set_title('magnitude of 2D DFT\nlow-pass filter', fontsize=10)
-  imax = ax.imshow(np.fft.fftshift(np.abs(lpf_filt)), cmap='magma',
+  ax = fig.add_subplot(gridspec[1, 2])
+  ax.set_title('(log) magnitude of 2D DFT\nlow-pass filter', fontsize=10)
+  imax = ax.imshow(np.log10(np.fft.fftshift(np.abs(lpf_filt))), cmap='magma',
                     aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
-  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  if tall_skinny:
+    cax = divider.append_axes("right", size="5%", pad=0.1)
+  else:
+    cax = divider.append_axes("right", size="5%", pad=-0.2)
   plt.colorbar(imax, cax=cax)
   ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
   ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
   ax.set_yticklabels(['-0.5', '0.0', '0.5'])
   ax.set_xticklabels(['-0.5', '0.0', '0.5'])
 
-  ax = fig.add_subplot(gridspec[2, 1])
-  ax.set_title('Slice along vert axis', fontsize=10)
-  ax.plot(np.linspace(-0.5, 0.5, lpf_filt.shape[0]),
-          np.fft.fftshift(np.abs(lpf_filt[:, 0])))
-  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
-  ax.set_ylabel('Magnitude of filter', fontsize=8)
-
-  ax = fig.add_subplot(gridspec[2, 2])
-  ax.set_title('Slice along horz axis', fontsize=10)
-  ax.plot(np.linspace(-0.5, 0.5, lpf_filt.shape[1]),
-          np.fft.fftshift(np.abs(lpf_filt[0, :])))
-  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
-  ax.set_ylabel('Magnitude of filter', fontsize=8)
-
-  ax = fig.add_subplot(gridspec[2, 3])
+  ax = fig.add_subplot(gridspec[1, 3])
   ax.set_title('Filter in image space', fontsize=10)
   uncropped = np.fft.fftshift(np.real(np.fft.ifft2(lpf_filt)))
   vmiddle = uncropped.shape[0]//2
@@ -186,6 +216,48 @@ def visualize_lp_filtering(o_img, lp_img, lpf_filt,
   ax.set_xticks([0, 20, 40])
   ax.set_yticklabels(['-20', '0', '20'])
   ax.set_xticklabels(['-20', '0', '20'])
+
+  ax = fig.add_subplot(gridspec[2, 0])
+  ax.set_title('Rotational avg', fontsize=10)
+  o_img_fpower = np.abs(np.fft.fft2(o_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(o_img.shape[0]),
+                            np.fft.fftfreq(o_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(o_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 1])
+  ax.set_title('Rotational avg', fontsize=10)
+  lp_img_fpower = np.abs(np.fft.fft2(lp_img))**2
+  fpower_mean, f = rotational_average(lp_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 2])
+  ax.set_title('Rotational avg', fontsize=10)
+  lp_filt_fpower = np.abs(lpf_filt)**2
+  fpower_mean, f = rotational_average(lp_filt_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
   plt.tight_layout()
 
 
@@ -222,7 +294,7 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
   ax = fig.add_subplot(gridspec[1, 0])
   ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -235,7 +307,7 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
   ax = fig.add_subplot(gridspec[1, 1])
   ax.set_title('(log) magnitude of 2D DFT\nwhitened image', fontsize=10)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log(np.abs(np.fft.fft2(w_img, dft_nsamps)))),
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(w_img, dft_nsamps)))),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -246,6 +318,61 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
   ax.set_xticklabels(['-0.5', '0.0', '0.5'])
 
   ax = fig.add_subplot(gridspec[1, 2])
+  ax.set_title('(log) magnitude of 2D DFT\nwhitening filter', fontsize=10)
+  imax = plt.imshow(np.fft.fftshift(np.log10(np.abs(w_filt))), cmap='magma',
+                    aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(imax, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
+  ax = fig.add_subplot(gridspec[1, 3])
+  plt.title('Filter in image space', fontsize=10)
+  uncropped = np.fft.fftshift(np.real(np.fft.ifft2(w_filt)))
+  vmiddle = uncropped.shape[0]//2
+  hmiddle = uncropped.shape[1]//2
+  cropped = uncropped[vmiddle-20:vmiddle+21, hmiddle-20:hmiddle+21]
+  imax = plt.imshow(cropped, cmap='Greys_r')
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=0.1)
+  plt.colorbar(imax, cax=cax)
+  ax.set_yticks([0, 20, 40])
+  ax.set_xticks([0, 20, 40])
+  ax.set_yticklabels(['-20', '0', '20'])
+  ax.set_xticklabels(['-20', '0', '20'])
+
+  ax = fig.add_subplot(gridspec[2, 0])
+  ax.set_title('Rotational avg', fontsize=10)
+  o_img_fpower = np.abs(np.fft.fft2(o_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(o_img.shape[0]),
+                            np.fft.fftfreq(o_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(o_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 1])
+  ax.set_title('Rotational avg', fontsize=10)
+  w_img_fpower = np.abs(np.fft.fft2(w_img))**2
+  fpower_mean, f = rotational_average(w_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 2])
   ax.set_title('Joint density of adjacent pixels\noriginal image', fontsize=10)
   # estimate the joint distribution of any arbitrary pair of adjacent pixels
   num_rand_samps = 10000
@@ -288,7 +415,7 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
                             fontsize=7)
   plt.gca().set_aspect('equal')
 
-  ax = fig.add_subplot(gridspec[1, 3])
+  ax = fig.add_subplot(gridspec[2, 3])
   ax.set_title('Joint density of adjacent pixels\nwhitened image', fontsize=10)
   # estimate the joint distribution of any arbitrary pair of adjacent pixels
   num_rand_samps = 10000
@@ -330,47 +457,6 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
                              '{:.1f}'.format(hist_bin_centers[1][-1])],
                             fontsize=7)
   plt.gca().set_aspect('equal')
-
-  ax = fig.add_subplot(gridspec[2, 0])
-  ax.set_title('magnitude of 2D DFT\nwhitening filter', fontsize=10)
-  imax = plt.imshow(np.fft.fftshift(np.abs(w_filt)), cmap='magma',
-                    aspect=dft_nsamps[1]/dft_nsamps[0])
-  divider = make_axes_locatable(ax)
-  cax = divider.append_axes("right", size="5%", pad=-0.2)
-  plt.colorbar(imax, cax=cax)
-  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
-  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
-  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
-  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
-
-  ax = fig.add_subplot(gridspec[2, 1])
-  plt.title('Slice along vert axis', fontsize=10)
-  plt.plot(np.linspace(-0.5, 0.5, w_filt.shape[0]),
-           np.fft.fftshift(np.abs(w_filt[:, 0])))
-  plt.xlabel('Frequency (units of sampling freq)', fontsize=8)
-  plt.ylabel('Magnitude of filter', fontsize=8)
-
-  ax = fig.add_subplot(gridspec[2, 2])
-  plt.title('Slice along horz axis', fontsize=10)
-  plt.plot(np.linspace(-0.5, 0.5, w_filt.shape[1]),
-           np.fft.fftshift(np.abs(w_filt[0, :])))
-  plt.xlabel('Frequency (units of sampling freq)', fontsize=8)
-  plt.ylabel('Magnitude of filter', fontsize=8)
-
-  ax = fig.add_subplot(gridspec[2, 3])
-  plt.title('Filter in image space', fontsize=10)
-  uncropped = np.fft.fftshift(np.real(np.fft.ifft2(w_filt)))
-  vmiddle = uncropped.shape[0]//2
-  hmiddle = uncropped.shape[1]//2
-  cropped = uncropped[vmiddle-20:vmiddle+21, hmiddle-20:hmiddle+21]
-  imax = plt.imshow(cropped, cmap='Greys_r')
-  divider = make_axes_locatable(ax)
-  cax = divider.append_axes("right", size="5%", pad=0.1)
-  plt.colorbar(imax, cax=cax)
-  ax.set_yticks([0, 20, 40])
-  ax.set_xticks([0, 20, 40])
-  ax.set_yticklabels(['-20', '0', '20'])
-  ax.set_xticklabels(['-20', '0', '20'])
 
   plt.tight_layout()
 
@@ -432,6 +518,51 @@ def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
   ax.set_xticklabels(['-0.5', '0.0', '0.5'])
 
   ax = fig.add_subplot(gridspec[1, 2])
+  p_basis_img, p_basis_im_range = plot_utils.get_dictionary_tile_imgs(
+      ZCA['PCA_basis'], (8, 8), renormalize=False)
+  plt.title('PCA basis used', fontsize=12)
+  plt.imshow(p_basis_img[0], cmap='Greys_r', vmin=p_basis_im_range[0][0],
+             vmax=p_basis_im_range[0][1])
+  plt.axis('off')
+
+  ax = fig.add_subplot(gridspec[1, 3])
+  ax.set_title('Variance in each dimension\ncomputed from dset', fontsize=10)
+  ax.plot(np.arange(len(ZCA['PCA_axis_variances'])), ZCA['PCA_axis_variances'])
+  ax.scatter(np.arange(len(ZCA['PCA_axis_variances'])),
+             ZCA['PCA_axis_variances'], s=5)
+  ax.set_yscale('log')
+  ax.set_ylabel('Variance', fontsize=8)
+  ax.set_xlabel('PC index', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 0])
+  ax.set_title('Rotational avg', fontsize=10)
+  o_img_fpower = np.abs(np.fft.fft2(o_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(o_img.shape[0]),
+                            np.fft.fftfreq(o_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(o_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 1])
+  ax.set_title('Rotational avg', fontsize=10)
+  w_img_fpower = np.abs(np.fft.fft2(w_img))**2
+  fpower_mean, f = rotational_average(w_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 2])
   ax.set_title('Joint density of adjacent pixels\noriginal image', fontsize=10)
   # estimate the joint distribution of any arbitrary pair of adjacent pixels
   num_rand_samps = 10000
@@ -474,7 +605,7 @@ def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
                             fontsize=7)
   plt.gca().set_aspect('equal')
 
-  ax = fig.add_subplot(gridspec[1, 3])
+  ax = fig.add_subplot(gridspec[2, 3])
   ax.set_title('Joint density of adjacent pixels\nwhitened image', fontsize=10)
   # estimate the joint distribution of any arbitrary pair of adjacent pixels
   num_rand_samps = 10000
@@ -517,23 +648,393 @@ def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
                             fontsize=7)
   plt.gca().set_aspect('equal')
 
+  plt.tight_layout()
+
+def visualize_lcn(o_img, normed_img, normalizer, o_img_recovered):
+  fig = plt.figure(figsize=(15, 8), dpi=100)
+  fig.suptitle('Local Contrast Normalization', fontsize=12)
+  sp_colwidths = [1, 1, 1, 1]
+  sp_rowheights = [4, 2, 2]
+  gridspec = fig.add_gridspec(ncols=4, nrows=3, width_ratios=sp_colwidths,
+                              height_ratios=sp_rowheights)
+
+  ax = fig.add_subplot(gridspec[0, 0])
+  ax.set_title('Original image', fontsize=10)
+  ax.imshow(o_img, cmap='Greys_r', vmin=o_img.min(), vmax=o_img.max())
+
+  ax = fig.add_subplot(gridspec[0, 1])
+  ax.set_title('Contrast normalized image', fontsize=10)
+  ax.imshow(normed_img, cmap='Greys_r', vmin=normed_img.min(),
+            vmax=normed_img.max())
+  ax.set_xlabel('pSNR to orig: ' + '{:.2f}'.format(
+    plot_utils.compute_pSNR(o_img, normed_img)) + 'dB')
+
+  ax = fig.add_subplot(gridspec[0, 2])
+  ax.set_title('Divided-out local contrast', fontsize=10)
+  ax.imshow(normalizer, cmap='Greys_r', vmin=o_img.min(), vmax=o_img.max())
+  ax.set_xlabel('pSNR to orig: ' + '{:.2f}'.format(
+    plot_utils.compute_pSNR(o_img, normalizer)) + 'dB')
+
+  ax = fig.add_subplot(gridspec[0, 3])
+  ax.set_title('Recovered original image', fontsize=10)
+  ax.imshow(o_img_recovered, cmap='Greys_r', vmin=o_img.min(), vmax=o_img.max())
+  ax.set_xlabel('pSNR to orig: ' + '{:.2f}'.format(
+    plot_utils.compute_pSNR(o_img, o_img_recovered)) + 'dB')
+
+  dft_nsamps = o_img.shape
+  ax = fig.add_subplot(gridspec[1, 0])
+  ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
+  orig_dft_im = plt.imshow(
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(orig_dft_im, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
+  ax = fig.add_subplot(gridspec[1, 1])
+  ax.set_title('(log) magnitude of 2D DFT\ncontrast-normalized image',
+               fontsize=10)
+  orig_dft_im = plt.imshow(
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(normed_img, dft_nsamps)))),
+      cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(orig_dft_im, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
+  ax = fig.add_subplot(gridspec[1, 2])
+  ax.set_title('(log) magnitude of 2D DFT\ndivided-out local contrast',
+               fontsize=10)
+  orig_dft_im = plt.imshow(
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(normalizer, dft_nsamps)))),
+      cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(orig_dft_im, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
   ax = fig.add_subplot(gridspec[2, 0])
-  p_basis_img, p_basis_im_range = plot_utils.get_dictionary_tile_imgs(
-      ZCA['PCA_basis'], (8, 8), renormalize=False)
-  plt.title('PCA basis used', fontsize=12)
-  plt.imshow(p_basis_img[0], cmap='Greys_r', vmin=p_basis_im_range[0][0],
-             vmax=p_basis_im_range[0][1])
-  plt.axis('off')
+  o_img_fpower = np.abs(np.fft.fft2(o_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(o_img.shape[0]),
+                            np.fft.fftfreq(o_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(o_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
 
   ax = fig.add_subplot(gridspec[2, 1])
-  ax.set_title('Variance in each dimension\ncomputed from dset', fontsize=10)
-  ax.plot(np.arange(len(ZCA['PCA_axis_variances'])), ZCA['PCA_axis_variances'])
-  ax.scatter(np.arange(len(ZCA['PCA_axis_variances'])),
-             ZCA['PCA_axis_variances'], s=5)
-  ax.set_ylabel('Variance', fontsize=8)
-  ax.set_xlabel('PC index', fontsize=8)
+  n_img_fpower = np.abs(np.fft.fft2(normed_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(normed_img.shape[0]),
+                            np.fft.fftfreq(normed_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(n_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 2])
+  ax.set_title('Joint density of adjacent pixels\noriginal image', fontsize=10)
+  # estimate the joint distribution of any arbitrary pair of adjacent pixels
+  num_rand_samps = 10000
+  samps = []
+  for _ in range(num_rand_samps):
+    pix1 = [np.random.randint(low=1, high=o_img.shape[0]-1),
+            np.random.randint(low=1, high=o_img.shape[1]-1)]
+    offsets = [(-1, -1), (-1, 0), (-1, 1),
+               (0, -1), (0, 1),
+               (1, -1), (1, 0), (1, 1)]
+    offset = offsets[np.random.choice(np.arange(8))]
+    pix2 = (pix1[0] + offset[0], pix1[1] + offset[1])
+    samps.append([o_img[pix1[0], pix1[1]], o_img[pix2[0], pix2[1]]])
+  samps = np.array(samps)
+  hist_nbins = (30, 30)
+  counts, hist_bin_edges = np.histogramdd(samps, bins=hist_nbins)
+  empirical_density = counts / np.sum(counts)
+  log_density = np.copy(empirical_density)
+  nonzero_inds = log_density != 0
+  log_density[nonzero_inds] = np.log(log_density[nonzero_inds])
+  log_density[nonzero_inds] -= np.min(log_density[nonzero_inds])
+  log_density[nonzero_inds] /= np.max(log_density[nonzero_inds])
+  hist_bin_centers = [(hist_bin_edges[x][:-1] + hist_bin_edges[x][1:]) / 2
+                      for x in range(len(hist_bin_edges))]
+  min_max_x = [hist_bin_centers[0][0], hist_bin_centers[0][-1]]
+  min_max_y = [hist_bin_centers[1][0], hist_bin_centers[1][-1]]
+  plt.imshow(np.flip(log_density.T, axis=0),
+             interpolation='nearest', cmap='Blues')
+  plt.xlabel('Values for a random pixel', fontsize=8)
+  plt.ylabel('Values for random adjacent pixel', fontsize=8)
+  plt.gca().set_xticks([0.0, hist_nbins[0]-1])
+  plt.gca().set_yticks([hist_nbins[1]-1, 0.0])
+  plt.xlim([-0.5, hist_nbins[0]-0.5])
+  plt.ylim([hist_nbins[1]-0.5, -0.5])
+  plt.gca().set_xticklabels(['{:.1f}'.format(hist_bin_centers[0][0]),
+                             '{:.1f}'.format(hist_bin_centers[0][-1])],
+                            fontsize=7)
+  plt.gca().set_yticklabels(['{:.1f}'.format(hist_bin_centers[1][0]),
+                             '{:.1f}'.format(hist_bin_centers[1][-1])],
+                            fontsize=7)
+  plt.gca().set_aspect('equal')
+
+  ax = fig.add_subplot(gridspec[2, 3])
+  ax.set_title('Joint density of adjacent pixels\ncontrast-normalized image',
+               fontsize=10)
+  # estimate the joint distribution of any arbitrary pair of adjacent pixels
+  num_rand_samps = 10000
+  samps = []
+  for _ in range(num_rand_samps):
+    pix1 = [np.random.randint(low=1, high=normed_img.shape[0]-1),
+            np.random.randint(low=1, high=normed_img.shape[1]-1)]
+    offsets = [(-1, -1), (-1, 0), (-1, 1),
+               (0, -1), (0, 1),
+               (1, -1), (1, 0), (1, 1)]
+    offset = offsets[np.random.choice(np.arange(8))]
+    pix2 = (pix1[0] + offset[0], pix1[1] + offset[1])
+    samps.append([normed_img[pix1[0], pix1[1]], normed_img[pix2[0], pix2[1]]])
+  samps = np.array(samps)
+  hist_nbins = (30, 30)
+  counts, hist_bin_edges = np.histogramdd(samps, bins=hist_nbins)
+  empirical_density = counts / np.sum(counts)
+  log_density = np.copy(empirical_density)
+  nonzero_inds = log_density != 0
+  log_density[nonzero_inds] = np.log(log_density[nonzero_inds])
+  log_density[nonzero_inds] -= np.min(log_density[nonzero_inds])
+  log_density[nonzero_inds] /= np.max(log_density[nonzero_inds])
+  hist_bin_centers = [(hist_bin_edges[x][:-1] + hist_bin_edges[x][1:]) / 2
+                      for x in range(len(hist_bin_edges))]
+  min_max_x = [hist_bin_centers[0][0], hist_bin_centers[0][-1]]
+  min_max_y = [hist_bin_centers[1][0], hist_bin_centers[1][-1]]
+  plt.imshow(np.flip(log_density.T, axis=0),
+             interpolation='nearest', cmap='Blues')
+  plt.xlabel('Values for a random pixel', fontsize=8)
+  plt.ylabel('Values for random adjacent pixel', fontsize=8)
+  plt.gca().set_xticks([0.0, hist_nbins[0]-1])
+  plt.gca().set_yticks([hist_nbins[1]-1, 0.0])
+  plt.xlim([-0.5, hist_nbins[0]-0.5])
+  plt.ylim([hist_nbins[1]-0.5, -0.5])
+  plt.gca().set_xticklabels(['{:.1f}'.format(hist_bin_centers[0][0]),
+                             '{:.1f}'.format(hist_bin_centers[0][-1])],
+                            fontsize=7)
+  plt.gca().set_yticklabels(['{:.1f}'.format(hist_bin_centers[1][0]),
+                             '{:.1f}'.format(hist_bin_centers[1][-1])],
+                            fontsize=7)
+  plt.gca().set_aspect('equal')
+
 
   plt.tight_layout()
+
+
+def visualize_lls(o_img, centered_img, subtractor, o_img_recovered):
+  fig = plt.figure(figsize=(15, 8), dpi=100)
+  fig.suptitle('Local Luminance Subtraction', fontsize=12)
+  sp_colwidths = [1, 1, 1, 1]
+  sp_rowheights = [4, 2, 2]
+  gridspec = fig.add_gridspec(ncols=4, nrows=3, width_ratios=sp_colwidths,
+                              height_ratios=sp_rowheights)
+
+  ax = fig.add_subplot(gridspec[0, 0])
+  ax.set_title('Original image', fontsize=10)
+  ax.imshow(o_img, cmap='Greys_r', vmin=o_img.min(), vmax=o_img.max())
+
+  ax = fig.add_subplot(gridspec[0, 1])
+  ax.set_title('Luminance centered image', fontsize=10)
+  ax.imshow(centered_img, cmap='Greys_r', vmin=centered_img.min(),
+            vmax=centered_img.max())
+  ax.set_xlabel('pSNR to orig: ' + '{:.2f}'.format(
+    plot_utils.compute_pSNR(o_img, centered_img)) + 'dB')
+
+  ax = fig.add_subplot(gridspec[0, 2])
+  ax.set_title('Subtracted-out local luminance', fontsize=10)
+  ax.imshow(subtractor, cmap='Greys_r', vmin=o_img.min(), vmax=o_img.max())
+  ax.set_xlabel('pSNR to orig: ' + '{:.2f}'.format(
+    plot_utils.compute_pSNR(o_img, subtractor)) + 'dB')
+
+  ax = fig.add_subplot(gridspec[0, 3])
+  ax.set_title('Recovered original image', fontsize=10)
+  ax.imshow(o_img_recovered, cmap='Greys_r', vmin=o_img.min(), vmax=o_img.max())
+  ax.set_xlabel('pSNR to orig: ' + '{:.2f}'.format(
+    plot_utils.compute_pSNR(o_img, o_img_recovered)) + 'dB')
+
+  dft_nsamps = o_img.shape
+  ax = fig.add_subplot(gridspec[1, 0])
+  ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
+  orig_dft_im = plt.imshow(
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(orig_dft_im, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
+  ax = fig.add_subplot(gridspec[1, 1])
+  ax.set_title('(log) magnitude of 2D DFT\nLuminance-centered image',
+               fontsize=10)
+  orig_dft_im = plt.imshow(
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(centered_img, dft_nsamps)))),
+      cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(orig_dft_im, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
+  ax = fig.add_subplot(gridspec[1, 2])
+  ax.set_title('(log) magnitude of 2D DFT\nsubtraced-out local luminance',
+               fontsize=10)
+  orig_dft_im = plt.imshow(
+      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(subtractor, dft_nsamps)))),
+      cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
+  divider = make_axes_locatable(ax)
+  cax = divider.append_axes("right", size="5%", pad=-0.2)
+  plt.colorbar(orig_dft_im, cax=cax)
+  ax.set_yticks([0, dft_nsamps[0]//2, dft_nsamps[0]])
+  ax.set_xticks([0, dft_nsamps[1]//2, dft_nsamps[1]])
+  ax.set_yticklabels(['-0.5', '0.0', '0.5'])
+  ax.set_xticklabels(['-0.5', '0.0', '0.5'])
+
+
+  ax = fig.add_subplot(gridspec[2, 0])
+  o_img_fpower = np.abs(np.fft.fft2(o_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(o_img.shape[0]),
+                            np.fft.fftfreq(o_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(o_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 1])
+  n_img_fpower = np.abs(np.fft.fft2(centered_img))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(centered_img.shape[0]),
+                            np.fft.fftfreq(centered_img.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(n_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+
+  ax = fig.add_subplot(gridspec[2, 2])
+  ax.set_title('Joint density of adjacent pixels\noriginal image', fontsize=10)
+  # estimate the joint distribution of any arbitrary pair of adjacent pixels
+  num_rand_samps = 10000
+  samps = []
+  for _ in range(num_rand_samps):
+    pix1 = [np.random.randint(low=1, high=o_img.shape[0]-1),
+            np.random.randint(low=1, high=o_img.shape[1]-1)]
+    offsets = [(-1, -1), (-1, 0), (-1, 1),
+               (0, -1), (0, 1),
+               (1, -1), (1, 0), (1, 1)]
+    offset = offsets[np.random.choice(np.arange(8))]
+    pix2 = (pix1[0] + offset[0], pix1[1] + offset[1])
+    samps.append([o_img[pix1[0], pix1[1]], o_img[pix2[0], pix2[1]]])
+  samps = np.array(samps)
+  hist_nbins = (30, 30)
+  counts, hist_bin_edges = np.histogramdd(samps, bins=hist_nbins)
+  empirical_density = counts / np.sum(counts)
+  log_density = np.copy(empirical_density)
+  nonzero_inds = log_density != 0
+  log_density[nonzero_inds] = np.log(log_density[nonzero_inds])
+  log_density[nonzero_inds] -= np.min(log_density[nonzero_inds])
+  log_density[nonzero_inds] /= np.max(log_density[nonzero_inds])
+  hist_bin_centers = [(hist_bin_edges[x][:-1] + hist_bin_edges[x][1:]) / 2
+                      for x in range(len(hist_bin_edges))]
+  min_max_x = [hist_bin_centers[0][0], hist_bin_centers[0][-1]]
+  min_max_y = [hist_bin_centers[1][0], hist_bin_centers[1][-1]]
+  plt.imshow(np.flip(log_density.T, axis=0),
+             interpolation='nearest', cmap='Blues')
+  plt.xlabel('Values for a random pixel', fontsize=8)
+  plt.ylabel('Values for random adjacent pixel', fontsize=8)
+  plt.gca().set_xticks([0.0, hist_nbins[0]-1])
+  plt.gca().set_yticks([hist_nbins[1]-1, 0.0])
+  plt.xlim([-0.5, hist_nbins[0]-0.5])
+  plt.ylim([hist_nbins[1]-0.5, -0.5])
+  plt.gca().set_xticklabels(['{:.1f}'.format(hist_bin_centers[0][0]),
+                             '{:.1f}'.format(hist_bin_centers[0][-1])],
+                            fontsize=7)
+  plt.gca().set_yticklabels(['{:.1f}'.format(hist_bin_centers[1][0]),
+                             '{:.1f}'.format(hist_bin_centers[1][-1])],
+                            fontsize=7)
+  plt.gca().set_aspect('equal')
+
+  ax = fig.add_subplot(gridspec[2, 3])
+  ax.set_title('Joint density of adjacent pixels\nLuminance-centered image',
+               fontsize=10)
+  # estimate the joint distribution of any arbitrary pair of adjacent pixels
+  num_rand_samps = 10000
+  samps = []
+  for _ in range(num_rand_samps):
+    pix1 = [np.random.randint(low=1, high=centered_img.shape[0]-1),
+            np.random.randint(low=1, high=centered_img.shape[1]-1)]
+    offsets = [(-1, -1), (-1, 0), (-1, 1),
+               (0, -1), (0, 1),
+               (1, -1), (1, 0), (1, 1)]
+    offset = offsets[np.random.choice(np.arange(8))]
+    pix2 = (pix1[0] + offset[0], pix1[1] + offset[1])
+    samps.append([centered_img[pix1[0], pix1[1]], centered_img[pix2[0], pix2[1]]])
+  samps = np.array(samps)
+  hist_nbins = (30, 30)
+  counts, hist_bin_edges = np.histogramdd(samps, bins=hist_nbins)
+  empirical_density = counts / np.sum(counts)
+  log_density = np.copy(empirical_density)
+  nonzero_inds = log_density != 0
+  log_density[nonzero_inds] = np.log(log_density[nonzero_inds])
+  log_density[nonzero_inds] -= np.min(log_density[nonzero_inds])
+  log_density[nonzero_inds] /= np.max(log_density[nonzero_inds])
+  hist_bin_centers = [(hist_bin_edges[x][:-1] + hist_bin_edges[x][1:]) / 2
+                      for x in range(len(hist_bin_edges))]
+  min_max_x = [hist_bin_centers[0][0], hist_bin_centers[0][-1]]
+  min_max_y = [hist_bin_centers[1][0], hist_bin_centers[1][-1]]
+  plt.imshow(np.flip(log_density.T, axis=0),
+             interpolation='nearest', cmap='Blues')
+  plt.xlabel('Values for a random pixel', fontsize=8)
+  plt.ylabel('Values for random adjacent pixel', fontsize=8)
+  plt.gca().set_xticks([0.0, hist_nbins[0]-1])
+  plt.gca().set_yticks([hist_nbins[1]-1, 0.0])
+  plt.xlim([-0.5, hist_nbins[0]-0.5])
+  plt.ylim([hist_nbins[1]-0.5, -0.5])
+  plt.gca().set_xticklabels(['{:.1f}'.format(hist_bin_centers[0][0]),
+                             '{:.1f}'.format(hist_bin_centers[0][-1])],
+                            fontsize=7)
+  plt.gca().set_yticklabels(['{:.1f}'.format(hist_bin_centers[1][0]),
+                             '{:.1f}'.format(hist_bin_centers[1][-1])],
+                            fontsize=7)
+  plt.gca().set_aspect('equal')
+
+  plt.tight_layout()
+
+
+
 
 if __name__ == '__main__':
   main()

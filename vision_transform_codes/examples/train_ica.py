@@ -16,7 +16,7 @@ import torch
 
 from training.ica import train_dictionary as ica_train
 from utils.plotting import TrainingLivePlot
-from utils.image_processing import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set
 
 RUN_IDENTIFIER = 'test_ICA'
 
@@ -44,7 +44,7 @@ ICA_PARAMS['training_visualization_schedule'].update(
 parser = argparse.ArgumentParser()
 parser.add_argument("data_id",
     help="Name of the dataset (currently allowable: " +
-         "Field_NW_whitened, Field_NW_unwhitened, vanHateren, Kodak)")
+         "Field_NW, vanHateren, Kodak)")
 parser.add_argument("data_filepath", help="The full path to dataset on disk")
 parser.add_argument("-l", "--logfile_dir",
                     help="Optionally checkpoint the model here")

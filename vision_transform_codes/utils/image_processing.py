@@ -8,12 +8,9 @@ strategies on images. Just leaving a few relevant references:
        overcomplete basis set: A strategy employed by V1?. Vision research,
        37(23), 3311-3325.
 """
-
-import pickle
 import numpy as np
-import scipy.io
-import h5py
-
+from scipy.signal import convolve2d
+from matplotlib import pyplot as plt
 
 def get_low_pass_filter(DFT_num_samples, filter_parameters):
   """
@@ -105,14 +102,29 @@ def filter_image(image, filter_DFT):
   This may optionally pad the image so as to match the number of samples in the
   filter DFT. We should make sure this is greater than or equal to the size of
   the image.
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      The image to be filtered. The filter is applied to each color
+      channel independently.
+  filter_DFT : ndarray(complex128, size=(fh, fw))
+      The filter has fh samples in the vertical dimension and fw samples in
+      the horizontal dimension
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
   """
-  assert image.dtype == 'float32'
+  assert image.dtype in ['float32', 'uint8']
   assert filter_DFT.shape[0] >= image.shape[0], "don't undersample DFT"
   assert filter_DFT.shape[1] >= image.shape[1], "don't undersample DFT"
-  filtered_with_padding = np.real(np.fft.ifft2(
-    filter_DFT * np.fft.fft2(image, filter_DFT.shape),
-    filter_DFT.shape)).astype('float32')
-  return filtered_with_padding[0:image.shape[0], 0:image.shape[1]]
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    filtered_image[:, :, color_channel] = np.real(np.fft.ifft2(
+      filter_DFT * np.fft.fft2(image[:, :, color_channel], filter_DFT.shape),
+      filter_DFT.shape)).astype('float32')[0:image.shape[0], 0:image.shape[1]]
+  return filtered_image
 
 
 def whiten_center_surround(image, return_filter=False):
@@ -124,12 +136,13 @@ def whiten_center_surround(image, return_filter=False):
 
   Parameters
   ----------
-  image : ndarray(float32 or uint8, size=(h, w))
-      An image of height h and width w
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      An image of height h and width w, with c color channels
   return_filter : bool, optional
       If true, also return the DFT of the used filter. Just for visualization
       and debugging purposes. Default False.
   """
+  assert image.dtype in ['float32', 'uint8']
   lpf = get_low_pass_filter(image.shape,
       {'shape': 'exponential', 'cutoff': 0.8, 'order': 4.0})
   wf = get_whitening_ramp_filter(image.shape)
@@ -144,19 +157,17 @@ def whiten_center_surround(image, return_filter=False):
 
 def unwhiten_center_surround(image, orig_filter_DFT=None):
   """
-  Undoes the scheme described in the Vision Research sparse coding paper
-
-  We have the composition of a low pass filter with a ramp in spatial frequency
-  which together produces a center-surround filter in the image domain
+  Undoes center-surround whitening
 
   Parameters
   ----------
-  image : ndarray(float32 or uint8, size=(h, w))
-      An image of height h and width w
+  image : ndarray(float32, size=(h, w, c))
+      An image of height h and width w, with c color channels
   orig_filter_DFT : ndarray(complex128), optional
       If not None, this is used to invert the whitening. Otherwise, we just
-      guess that it's the standard 4th-order exponential times ramp filter
+      guess that it's the standard 4th-order exponential times the ramp filter
   """
+  assert image.dtype == 'float32'
   if orig_filter_DFT is None:
     # then guess the original filter DFT
     lpf = get_low_pass_filter(image.shape,
@@ -295,6 +306,90 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
   return colored_data
 
 
+def local_contrast_nomalization(image, kernel_size, return_normalizer=False):
+  """
+  Computes an estimate of the local contrast and removes this from an image
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      An image of height h and width w, with c color channels
+  kernel_size : tuple(int, int)
+      The size of the gaussian kernel used
+  return_normalizer : bool, optional
+      If true, return the array used to do the normalization -- this can be
+      used to reverse the transform. Defualt False.
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  normalizer : ndarray(float32, size=(h, w, c))
+  """
+  v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
+                       int(np.ceil(kernel_size[0]/2)))
+  h_coords = np.arange(-int(np.floor(kernel_size[1]/2)),
+                       int(np.ceil(kernel_size[1]/2)))
+  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
+  g_variance = np.floor(max(kernel_size[0], kernel_size[1])/2)**2
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
+  gaussian_kernel /= np.sum(gaussian_kernel)
+
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  local_variance = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    local_variance[:, :, color_channel] = convolve2d(
+        image[:, :, color_channel]**2, gaussian_kernel, 'same')
+    filtered_image[:, :, color_channel] = (image[:, :, color_channel] /
+        np.sqrt(local_variance[:, :, color_channel]))
+
+  if return_normalizer:
+    return filtered_image, np.sqrt(local_variance)
+  else:
+    return filtered_image
+
+
+def local_luminance_subtraction(image, kernel_size, return_subtractor=False):
+  """
+  Computes an estimate of the local luminance and removes this from an image
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      An image of height h and width w, with c color channels
+  kernel_size : tuple(int, int)
+      The size of the gaussian kernel used
+  return_subtractor : bool, optional
+      If true, return the array used to do the luminance subtraction -- this
+      can be used to reverse the transform. Defualt False.
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  subtractor : ndarray(float32, size=(h, w, c))
+  """
+  v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
+                       int(np.ceil(kernel_size[0]/2)))
+  h_coords = np.arange(-int(np.floor(kernel_size[1]/2)),
+                       int(np.ceil(kernel_size[1]/2)))
+  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
+  g_variance = np.floor(max(kernel_size[0], kernel_size[1])/2)**2
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
+  gaussian_kernel /= np.sum(gaussian_kernel)
+
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  local_luminance = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    local_luminance[:, :, color_channel] = convolve2d(
+        image[:, :, color_channel], gaussian_kernel, 'same')
+    filtered_image[:, :, color_channel] = (image[:, :, color_channel] -
+        local_luminance[:, :, color_channel])
+
+  if return_subtractor:
+    return filtered_image, local_luminance
+  else:
+    return filtered_image
+
+
 def center_each_component(flat_data):
   """
   Makes each component of data have mean zero across the dataset
@@ -371,14 +466,14 @@ def patches_from_single_image(image, patch_dimensions):
 
   Parameters
   ----------
-  image : ndarray(float32 or uint8, size=(h, w))
-      An image of height h and width w
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      An image of height h and width w, with c color channels
   patch_dimensions : tuple(int, int)
       The size in pixels of each patch
 
   Returns
   -------
-  patches : ndarray(float32 or uint8, size=(ph*pw, k))
+  patches : ndarray(float32, size=(ph*pw*c, k))
       An array of flattened patches each of height ph and width pw. k is the
       number of total patches that were extracted from the full image
   patch_positions : list(tuple(int, int))
@@ -391,7 +486,7 @@ def patches_from_single_image(image, patch_dimensions):
 
   num_patches_vert = image.shape[0] // patch_dimensions[0]
   num_patches_horz = image.shape[1] // patch_dimensions[1]
-  patch_flatsize = patch_dimensions[0] * patch_dimensions[1]
+  patch_flatsize = patch_dimensions[0] * patch_dimensions[1] * image.shape[2]
   patch_positions = []  # keep track of where each patch belongs
   patches = np.zeros([patch_flatsize, num_patches_vert * num_patches_horz],
                      dtype=image.dtype)
@@ -415,7 +510,7 @@ def assemble_image_from_patches(patches, patch_dimensions, patch_positions):
 
   Parameters
   ----------
-  patches : ndarray(float32 or uint8, size=(ph*pw, k))
+  patches : ndarray(float32 or uint8, size=(ph*pw*c, k))
       An array of flattened patches each of height ph and width pw. k is the
       number of total patches that were extracted from the full image
   patch_dimensions : tuple(int, int)
@@ -426,7 +521,7 @@ def assemble_image_from_patches(patches, patch_dimensions, patch_positions):
 
   Returns
   -------
-  image : ndarray(float32 or uint8, size=(h, w))
+  image : ndarray(float32 or uint8, size=(h, w, c))
       An image of height h and width w
   """
   assert patches.dtype in ['float32', 'uint8']
@@ -435,203 +530,18 @@ def assemble_image_from_patches(patches, patch_dimensions, patch_positions):
                      patch_dimensions[0])
   full_img_width = (np.max([x[1] for x in patch_positions]) +
                     patch_dimensions[1])
-  full_img = np.zeros([full_img_height, full_img_width], dtype=patches.dtype)
+  inferred_num_color_channels = (patches.shape[0] /
+                                 (patch_dimensions[0]*patch_dimensions[1]))
+  assert inferred_num_color_channels % 1.0 == 0
+  inferred_num_color_channels = int(inferred_num_color_channels)
+  reshaped_patch_shape = patch_dimensions + (inferred_num_color_channels,)
+
+  full_img = np.zeros([full_img_height, full_img_width,
+                       inferred_num_color_channels], dtype=patches.dtype)
   for patch_idx in range(patches.shape[1]):
     vert = patch_positions[patch_idx][0]
     horz = patch_positions[patch_idx][1]
     full_img[vert:vert+patch_dimensions[0], horz:horz+patch_dimensions[1]] = \
-        patches[:, patch_idx].reshape(patch_dimensions)
+        patches[:, patch_idx].reshape(reshaped_patch_shape)
 
   return full_img
-
-
-def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
-    batch_size, num_batches, edge_buffer, dataset, datasetparams):
-  """
-  Creates a large batch of training patches from one of our available datasets
-
-  Parameters
-  ----------
-  order_of_preproc_ops : list(str)
-      Specifies the preprocessing operations to perform on the data. Currently
-      available operations are
-      ----
-      {'whiten_center_surround', 'whiten_ZCA', 'patch',
-       'center_each_component', 'center_each_patch',
-       'normalize_component_variance', 'divide_by_constant',
-       'shift_by_constant'}.
-      ----
-      Example: (we want to perform Bruno's whitening in the fourier domain and
-                also have the components of each patch have zero mean)
-          ['whiten_center_surround', 'patch', 'center_each_component']
-  patch_dimensions : tuple(int, int)
-      The size in pixels of each patch
-  batch_size : int
-      The number of patches in a batch
-  num_batches : int
-      The total number of batches to assemble
-  edge_buffer : int
-      The buffer from the edge of the image from which we will not include any
-      patches.
-  dataset : str
-      The name of the dataset to grab patches from. Currently one of
-      {'Field_NW_unwhitened', 'Field_NW_whitened', 'vanHateren', 'Kodak'}.
-  datasetparams : dictionary
-      A dictionary of parameters that may be specific to the dataset. Currently
-      just specifies the filepath of the data file and which images to
-      exclude from the training set.
-      'filepath' : str
-      'exclude' : list(int)
-      'div_constant': float (only checked if divide_by_constant preproc)
-      'shift_constant': float (only checked if shift_by_constant preproc)
-
-  Returns
-  -------
-  return_dict : dictionary
-    'batched_patches' : ndarray(float32, size=(k, n, b))
-        The patches training set where k=num_batches,
-        n=patch_dimensions[0]*patch_dimensions[1], and b=batch_size. These are
-        patches ready to be sent to the gpu and consumed in PyTorch
-    --- OPTIONAL RETURNS ---
-    'original_component_means' : ndarray(float32, size=(n,)), optional
-        If 'center_each_component' was requested as a preprocessing step we
-        return the original component means so that future data can be
-        processed using this same exact centering
-    'original_component_variances' : ndarray(float32, size=(n,)), optional
-        If 'normalize_component_variance' was requested as a preprocessing step
-        we return the original variances so that future data can be processed
-        using this same exact normalization
-    'ZCA_parameters : dictionary, optional
-        See whiten_ZCA() above.
-  """
-  assert 'patch' in order_of_preproc_ops
-  # our convention is that the first axis indexes images
-  if dataset == 'Field_NW_whitened':
-    # data is stored as a .mat file
-    unprocessed_images = scipy.io.loadmat(
-      datasetparams['filepath'])['IMAGES'].astype('float32')
-    temp = np.transpose(unprocessed_images, (2, 0, 1))
-    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
-  elif dataset == 'Field_NW_unwhitened':
-    unprocessed_images = scipy.io.loadmat(
-      datasetparams['filepath'])['IMAGESr'].astype('float32')
-    temp = np.transpose(unprocessed_images, (2, 0, 1))
-    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
-  elif dataset == 'vanHateren':
-    # this dataset is MUCH larger so it will take some time to load into memory
-    with h5py.File(datasetparams['filepath']) as file_handle:
-      temp = np.array(file_handle['van_hateren_good'],
-                                    dtype='float32')
-    unprocessed_images = [temp[x] for x in range(temp.shape[0])]
-    #^ maximum pixel value is 1.0, but minimum value is NOT 0.0, more like 0.4
-  elif dataset == 'Kodak':
-    unprocessed_images = pickle.load(open(datasetparams['filepath'], 'rb'))
-    # this is a list of images, so that each image can be EITHER
-    # 752x496 or 496x752, whichever makes it upright
-    unprocessed_images = [x.astype('float32') for x in unprocessed_images]
-    #^ these should be float32 for further processing...
-  else:
-    raise KeyError('Unrecognized dataset ' + dataset)
-  eligible_image_inds = np.array([x for x in range(len(unprocessed_images))
-                                  if x not in datasetparams['exclude']])
-
-  p_imgs = [unprocessed_images[x] for x in eligible_image_inds]
-  already_patched_flag = False
-  for preproc_op in order_of_preproc_ops:
-
-    if preproc_op == 'patch':
-      max_vert_pos = []
-      min_vert_pos = []
-      max_horz_pos = []
-      min_horz_pos = []
-      for img_idx in range(len(p_imgs)):
-        max_vert_pos.append(
-            p_imgs[img_idx].shape[0] - patch_dimensions[0] - edge_buffer)
-        min_vert_pos.append(edge_buffer)
-        max_horz_pos.append(
-            p_imgs[img_idx].shape[1] - patch_dimensions[1] - edge_buffer)
-        min_horz_pos.append(edge_buffer)
-      num_imgs = len(p_imgs)
-
-      all_patches = np.zeros(
-        [patch_dimensions[0]*patch_dimensions[1], num_batches*batch_size],
-        dtype='float32')
-
-      p_idx = 0
-      for batch_idx in range(num_batches):
-        for _ in range(batch_size):
-          img_idx = np.random.randint(low=0, high=num_imgs)
-          vert_pos = np.random.randint(low=min_vert_pos[img_idx],
-                                       high=max_vert_pos[img_idx])
-          horz_pos = np.random.randint(low=min_horz_pos[img_idx],
-                                       high=max_horz_pos[img_idx])
-          all_patches[:, p_idx] = p_imgs[img_idx][
-            vert_pos:vert_pos+patch_dimensions[0],
-            horz_pos:horz_pos+patch_dimensions[1]].reshape(
-                [patch_dimensions[0]*patch_dimensions[1]])
-          p_idx += 1
-        if batch_idx % 1000 == 0 and batch_idx != 0:
-          print('Finished creating', batch_idx, 'batches')
-      print('Done.')
-      already_patched_flag = True
-
-    elif preproc_op == 'whiten_center_surround':
-      if already_patched_flag:
-        raise KeyError('We typically preform this type of whitening before ' +
-                       'patching the images')
-      for img_idx in range(len(p_imgs)):
-        p_imgs[img_idx] = whiten_center_surround(p_imgs[img_idx])
-
-    elif preproc_op == 'whiten_ZCA':
-      if not already_patched_flag:
-        raise KeyError('You ought to patch image before trying to compute a ' +
-                       'ZCA whitening transform')
-      all_patches, computed_ZCA_params = whiten_ZCA(all_patches)
-
-    elif preproc_op == 'divide_by_constant':
-      if already_patched_flag:
-        all_patches = all_patches / datasetparams['div_constant']
-      else:
-        # likely use case is to do this before whitening and patching
-        for img_idx in range(len(p_imgs)):
-          p_imgs[img_idx] = p_imgs[img_idx] / datasetparams['div_constant']
-
-    elif preproc_op == 'shift_by_constant':
-      if already_patched_flag:
-        all_patches = all_patches + datasetparams['shift_constant']
-      else:
-        for img_idx in range(len(p_imgs)):
-          p_imgs[img_idx] = p_imgs[img_idx] + datasetparams['shift_constant']
-
-    elif preproc_op == 'center_each_component':
-      if not already_patched_flag:
-        raise KeyError('You ought to patch the data before trying to ' +
-                       'center each component')
-      all_patches, component_means = center_each_component(all_patches)
-
-    elif preproc_op == 'normalize_component_variance':
-      if not already_patched_flag:
-        raise KeyError('You ought to patch the data before normalizing it')
-      all_patches, orig_variances = normalize_component_variance(all_patches)
-
-    elif preproc_op == 'center_each_patch':
-      if not already_patched_flag:
-        raise KeyError('You ought to patch the data before trying to ' +
-                       'center each patch')
-      all_patches, _ = center_each_sample(all_patches)
-
-    else:
-      raise KeyError('Unrecognized preprocessing op ' + preproc_op)
-
-  # now we finally chunk this up into batches and return
-  return_dict = {'batched_patches': all_patches.T.reshape(
-                    (num_batches, batch_size, -1)).transpose((0, 2, 1))}
-                 #^ size=(k, n, b)
-  if 'center_each_component' in order_of_preproc_ops:
-    return_dict['original_component_means'] = component_means
-  if 'normalize_component_variance' in order_of_preproc_ops:
-    return_dict['original_component_variances'] = orig_variances
-  if 'whiten_ZCA' in order_of_preproc_ops:
-    return_dict['ZCA_parameters'] = computed_ZCA_params
-
-  return return_dict
