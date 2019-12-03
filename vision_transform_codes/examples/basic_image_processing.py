@@ -1,12 +1,7 @@
 """
 Just some simple examples of how to use the image processing utils
 """
-
-import sys
-import os
-examples_fullpath = os.path.dirname(os.path.abspath(__file__))
-toplevel_dir_fullpath = examples_fullpath[:examples_fullpath.rfind('/')+1]
-sys.path.insert(0, toplevel_dir_fullpath)
+import _set_the_path
 
 import pickle
 import numpy as np
@@ -20,9 +15,9 @@ from utils.misc import rotational_average
 
 def main():
   # we'll just show this on Kodak images, you can change this as you see fit
-  WHICH_DEMO_IMAGES = 'Kodak'
+  WHICH_DEMO_IMAGES = 'Kodak_BW'
 
-  if WHICH_DEMO_IMAGES == 'Kodak':
+  if WHICH_DEMO_IMAGES == 'Kodak_BW':
     raw_data_filepath = \
         '/home/spencerkent/Datasets/Kodak/kodak_full_images_training.p'
     unprocessed_images = pickle.load(open(raw_data_filepath, 'rb'))
@@ -68,7 +63,7 @@ def main():
   print('Creating a dataset of patches')
   one_mil_image_patches = dset_generation.create_patch_training_set(
       ['patch'], (8, 8),
-      1000000, 1, edge_buffer=5, dataset='Kodak',
+      1000000, 1, edge_buffer=5, dataset=WHICH_DEMO_IMAGES,
       datasetparams={'filepath': raw_data_filepath,
                      'exclude': []})['batched_patches'][0]
   print('Estimating the ZCA transform parameters based on this data')
