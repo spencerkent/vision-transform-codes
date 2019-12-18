@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 import torch
 
 from training.pca import train_dictionary as pca_train
-from analysis_transforms import invertible_linear
+from analysis_transforms.fully_connected import invertible_linear
 from utils.dataset_generation import create_patch_training_set
 from utils.plotting import TrainingLivePlot
 from utils.plotting import display_dictionary

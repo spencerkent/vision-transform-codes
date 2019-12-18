@@ -1,8 +1,10 @@
 """
-This uses the diagonal of the Hessian to rescale the updates
+Updates dictionary with a modified descent for fully-connected sparse coding.
 
-It's like getting a quadratic update for each coefficient independently, while
-not computing the full hessian.
+What I mean by fully-connected is that the basis functions have the same
+dimensionality as the images. This uses the diagonal of the Hessian to
+rescale the updates. It's like getting a quadratic update for each coefficient
+independently, while not computing the full hessian.
 """
 import torch
 
@@ -27,14 +29,15 @@ def run(images, dictionary, codes, hessian_diagonal, stepsize=0.001,
       An estimate of the diagonal of the hessian that we'll compute outside of
       this function call.
   stepsize : torch.Tensor(float32)
-      The step size for each iteration of the quad. descent. Keep this small
-  num_iters : int
-      Number of steps of quad. descent to run
-  lowest_code_val : float
-      Used to condition the hessian diagonal to not be too small
+      The step size for each iteration of the quad. descent. Keep this small.
+      Default 0.001.
+  num_iters : int, optional
+      Number of steps of quad. descent to run. Default 1.
+  lowest_code_val : float, optional
+      Used to condition the hessian diagonal to not be too small. Default 0.001
   normalize_dictionary : bool, optional
       If true, we normalize each dictionary element to have l2 norm equal to 1
-      before we return.
+      before we return. Default True.
   """
   for iter_idx in range(num_iters):
     dict_update = stepsize * torch.mm(torch.mm(dictionary, codes) - images,

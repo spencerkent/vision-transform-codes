@@ -5,6 +5,7 @@ import _set_the_path
 
 import argparse
 import pickle
+from pathlib import Path
 import numpy as np
 from matplotlib import pyplot as plt
 import torch
@@ -31,7 +32,10 @@ ICA_PARAMS = {
       2 * NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1},
       5 * NUM_BATCHES: {'stepsize': 0.0025, 'num_iters': 1},
       7 * NUM_BATCHES: {'stepsize': 0.001, 'num_iters': 1}},
-    'training_visualization_schedule': {0: None, 1000: None, 2000: None}}
+    'training_visualization_schedule': {
+      0: None, 1000: None, 2000: None, 4000: None, 8000: None, 
+      (NUM_EPOCHS * NUM_BATCHES) - 1: None,
+      'reshaped_kernel_size': (PATCH_HEIGHT, PATCH_WIDTH)}}
 ICA_PARAMS['training_visualization_schedule'].update(
     {NUM_BATCHES*x: None for x in range(NUM_EPOCHS)})
 
@@ -39,15 +43,15 @@ ICA_PARAMS['training_visualization_schedule'].update(
 parser = argparse.ArgumentParser()
 parser.add_argument("data_id",
     help="Name of the dataset (currently allowable: " +
-         "Field_NW, vanHateren, Kodak)")
+         "Field_NW, vanHateren, Kodak_BW)")
 parser.add_argument("data_filepath", help="The full path to dataset on disk")
 parser.add_argument("-l", "--logfile_dir",
                     help="Optionally checkpoint the model here")
 script_args = parser.parse_args()
 
 if script_args.logfile_dir is not None:
-  ICA_PARAMS['checkpoint_schedule'] = {'checkpoint_folder_fullpath':
-      script_args.logfile_dir + RUN_IDENTIFIER,
+  ICA_PARAMS['logging_folder_fullpath'] = Path(script_args.logfile_dir) / RUN_IDENTIFIER
+  ICA_PARAMS['checkpoint_schedule'] = {
       NUM_BATCHES: None, (NUM_EPOCHS*NUM_BATCHES)-1: None}
 
 torch_device = torch.device('cuda:1')
@@ -79,17 +83,6 @@ image_patches_gpu = torch.from_numpy(
 Q, R = np.linalg.qr(np.random.standard_normal((PATCH_HEIGHT*PATCH_WIDTH,
                                                CODE_SIZE)))
 ica_dictionary = torch.from_numpy(Q.astype('float32')).to(torch_device)
-
-# Create the LivePlot object
-liveplot_obj = TrainingLivePlot(
-    dict_plot_params={'total_num': CODE_SIZE, 'img_height': PATCH_HEIGHT,
-                      'img_width': PATCH_WIDTH, 'plot_width': 16,
-                      'plot_height': 16, 'renorm imgs': True,
-                      'display_ordered': True},
-    code_plot_params={'size': CODE_SIZE, 'num_displayed': 20})
-
-ICA_PARAMS['training_visualization_schedule'][
-    'liveplot_object_reference'] = liveplot_obj
 
 print("Here we go!")
 ica_train(image_patches_gpu, ica_dictionary, ICA_PARAMS)

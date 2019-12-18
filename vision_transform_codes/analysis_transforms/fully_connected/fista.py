@@ -1,5 +1,8 @@
 """
-Implementation of Iterative Soft Thresholding
+Fast Iterative Soft Thresholding for fully-connected sparse inference
+
+What I mean by fully-connected is that the basis functions have the same
+dimensionality as the images.
 """
 import torch
 
@@ -7,9 +10,9 @@ def run(images, dictionary, sparsity_weight, num_iters,
         initial_codes=None, early_stopping_epsilon=None,
         nonnegative_only=False):
   """
-  Runs steps of Iterative Soft Thresholding with a constant stepsize
+  Runs steps of Fast Iterative Soft Thresholding, with fixed stepsize
 
-  Computes ISTA updates on samples in parallel. Written to
+  Computes FISTA updates on samples in parallel. Written to
   minimize data copies, for speed. Ideally, one could stop computing updates
   on a sample whose code is no longer changing very much. However, the
   copying overhead this requires (to only update a newer, smaller set of
@@ -55,26 +58,37 @@ def run(images, dictionary, sparsity_weight, num_iters,
   # so we can use the smaller covariance matrix of size (n, n), which will
   # have the same eigenvalues. One could instead perform a linesearch to
   # find the stepsize, but in my experience this does not work well.
-  lipschitz_constant = torch.symeig(
-      torch.mm(dictionary, dictionary.t()))[0][-1]
+  try:
+    lipschitz_constant = torch.symeig(
+        torch.mm(dictionary, dictionary.t()))[0][-1]
+  except RuntimeError:
+    print('symeig threw an exception. Likely due to one of the dictionary',
+          'elements overflowing. The norm of each dictionary element is')
+    print(torch.norm(dictionary, dim=0, p=2))
+    raise RuntimeError()
   stepsize = 1. / lipschitz_constant
 
   if initial_codes is None:
     codes = images.new_zeros(dictionary.size(1), images.size(1))
   else:
     codes = initial_codes  # warm restart, we'll begin with these values
+  aux_points = torch.zeros_like(codes).copy_(codes)
+  # ^the twist in FISTA is that we compute a proximal update using a set of
+  #  auxilliary points.
 
   if early_stopping_epsilon is not None:
-    old_codes = torch.zeros_like(codes).copy_(codes)
     avg_per_component_delta = float('inf')
+  old_codes = torch.zeros_like(codes).copy_(codes)
   stop_early = False
+  t_kplusone = 1.
   iter_idx = 0
   while (iter_idx < num_iters and not stop_early):
 
-    ###### Proximal step #######
-    # gradient of l2 term is <dictionary^T, (<dictionary, codes> - images)>
-    codes.sub_(stepsize * torch.mm(dictionary.t(),
-                                   torch.mm(dictionary, codes) - images))
+    t_k = t_kplusone
+    ###### Proximal step using aux pts #######
+    # grad of l2 term w/ aux is <dictionary^T, (<dictionary, aux> - images)>
+    codes = aux_points - stepsize * torch.mm(
+        dictionary.t(), torch.mm(dictionary, aux_points) - images)
     if nonnegative_only:
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       #^ shifted rectified linear activation
@@ -83,16 +97,20 @@ def run(images, dictionary, sparsity_weight, num_iters,
       codes.abs_()
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       codes.mul_(pre_threshold_sign)
-      #^ now contains the "soft thresholded" (non-rectified) output
-    ###### Proximal step #######
+      #^ now contains the "soft thresholded" (non-rectified) output x_{k+1}
+    ###### Proximal step using aux pts #######
+    t_kplusone = (1 + (1 + (4 * t_k**2))**0.5) / 2
+    beta_kplusone = (t_k - 1) / t_kplusone
+    change_in_codes = codes - old_codes
+    aux_points = codes + beta_kplusone*(change_in_codes)
 
     if early_stopping_epsilon is not None:
       avg_per_component_delta = torch.mean(
-          torch.abs(codes - old_codes) / stepsize)
+          torch.abs(change_in_codes) / stepsize)
       stop_early = (avg_per_component_delta < early_stopping_epsilon
                     and iter_idx > 0)
-      old_codes.copy_(codes)
 
+    old_codes.copy_(codes)
     iter_idx += 1
 
   return codes
