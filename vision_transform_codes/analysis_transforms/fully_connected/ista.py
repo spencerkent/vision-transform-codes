@@ -1,5 +1,8 @@
 """
-Implementation of Iterative Soft Thresholding
+Iterative Soft Thresholding for fully-connected sparse inference
+
+What I mean by fully-connected is that the basis functions have the same
+dimensionality as the images.
 """
 import torch
 
@@ -19,11 +22,10 @@ def run(images, dictionary, sparsity_weight, num_iters,
   Parameters
   ----------
   images : torch.Tensor(float32, size=(n, b))
-      An array of images (probably just small patches) that we want to find the
-      sparse code for. n is the size of each image and b is the number of
-      images in this batch
+      An batch of images (probably just small patches) that we want to find the
+      sparse code for. n is the size of each image and b is the number of imgs.
   dictionary : torch.Tensor(float32, size=(n, s))
-      This is the dictionary of basis functions that we can use to descibe the
+      This is the dictionary of basis functions that we can use to describe the
       images. n is the size of each image and s in the size of the code.
   sparsity_weight : torch.Tensor(float32)
       This is the weight on the sparsity cost term in the sparse coding cost
@@ -40,7 +42,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
       If true, our code values can only be nonnegative. We just chop off the
       left half of the ISTA soft thresholding function and it becomes a
       shifted RELU function. The amount of the shift from a generic RELU is
-      precisely the sparsity_weight. Default False
+      the sparsity_weight times the (inferred) stepsize. Default False.
 
   Returns
   -------
@@ -55,8 +57,13 @@ def run(images, dictionary, sparsity_weight, num_iters,
   # so we can use the smaller covariance matrix of size (n, n), which will
   # have the same eigenvalues. One could instead perform a linesearch to
   # find the stepsize, but in my experience this does not work well.
-  lipschitz_constant = torch.symeig(
-      torch.mm(dictionary, dictionary.t()))[0][-1]
+  try:
+    lipschitz_constant = torch.symeig(
+        torch.mm(dictionary, dictionary.t()))[0][-1]
+  except:
+    print('symeig threw an exception. Likely due to one of the dictionary',
+          'elements overflowing. The norm of each dictionary element is')
+    print(torch.norm(dictionary, dim=0, p=2))
   stepsize = 1. / lipschitz_constant
 
   if initial_codes is None:

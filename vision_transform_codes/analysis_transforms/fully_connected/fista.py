@@ -1,5 +1,8 @@
 """
-Implementation of Fast Iterative Soft Thresholding (Accelerated proximal grad)
+Fast Iterative Soft Thresholding for fully-connected sparse inference
+
+What I mean by fully-connected is that the basis functions have the same
+dimensionality as the images.
 """
 import torch
 
@@ -55,8 +58,13 @@ def run(images, dictionary, sparsity_weight, num_iters,
   # so we can use the smaller covariance matrix of size (n, n), which will
   # have the same eigenvalues. One could instead perform a linesearch to
   # find the stepsize, but in my experience this does not work well.
-  lipschitz_constant = torch.symeig(
-      torch.mm(dictionary, dictionary.t()))[0][-1]
+  try:
+    lipschitz_constant = torch.symeig(
+        torch.mm(dictionary, dictionary.t()))[0][-1]
+  except:
+    print('symeig threw an exception. Likely due to one of the dictionary',
+          'elements overflowing. The norm of each dictionary element is')
+    print(torch.norm(dictionary, dim=0, p=2))
   stepsize = 1. / lipschitz_constant
 
   if initial_codes is None:
