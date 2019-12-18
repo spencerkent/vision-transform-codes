@@ -97,9 +97,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
               open(ckpt_path+'/training_params.yaml', 'w'))
 
   # let's only import the things we need
-  from analysis_transforms import invertible_linear
+  from analysis_transforms.fully_connected import invertible_linear
   if dict_update_alg == 'ica_natural_gradient':
-    from dict_update_rules import ica_natural_gradient
+    from dict_update_rules.fully_connected import ica_natural_gradient
   else:
     raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
 

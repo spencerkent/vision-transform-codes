@@ -113,16 +113,16 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
   # let's only import the things we need
   if code_inf_alg == 'ista':
-    from analysis_transforms import ista as inference_alg
+    from analysis_transforms.fully_connected import ista as inference_alg
   elif code_inf_alg == 'fista':
-    from analysis_transforms import fista as inference_alg
+    from analysis_transforms.fully_connected import fista as inference_alg
   else:
     raise KeyError('Unrecognized code inference algorithm: ' + code_inf_alg)
 
   if dict_update_alg == 'sc_steepest_descent':
-    from dict_update_rules import sc_steepest_descent as dict_update
+    from dict_update_rules.fully_connected import sc_steepest_descent as dict_update
   elif dict_update_alg == 'sc_cheap_quadratic_descent':
-    from dict_update_rules import sc_cheap_quadratic_descent as dict_update
+    from dict_update_rules.fully_connected import sc_cheap_quadratic_descent as dict_update
     hessian_diag = init_dictionary.new_zeros(init_dictionary.size(1))
     #^ we'll compute a 'smoothed' version of this at every iteration
   else:
