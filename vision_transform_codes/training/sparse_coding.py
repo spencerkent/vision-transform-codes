@@ -130,7 +130,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
             image_padding[0][0]:-image_padding[0][1],
             image_padding[1][0]:-image_padding[1][1]]
       lasso_l1_component = np.mean(
-          sparsity_weigh * torch.norm(codes, p=1, dim=(1, 2, 3)).cpu().numpy())
+          sparsity_weight * torch.norm(codes, p=1, dim=(1, 2, 3)).cpu().numpy())
       lasso_l2_component = np.mean(
           0.5 * np.sum(np.square(
             recons_wo_padding - batch_images_np_wo_padding), axis=(1, 2, 3)))
@@ -143,8 +143,6 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         psnr = compute_pSNR(batch_images_np_wo_padding[b_idx],
                             recons_wo_padding[b_idx],
                             manual_sig_mag=batch_sig_mag)
-        avg_recon_psnr += compute_pSNR(
-            batch_images_np_wo_padding[b_idx], recons_wo_padding[b_idx])
         if psnr != np.inf:
           recon_psnr.append(psnr)
     avg_recon_psnr = np.mean(recon_psnr)
@@ -167,7 +165,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         plot_title='Current dictionary (no renorm), iter {}'.format(
           total_iter_idx))
     for fig_idx in range(len(tiled_kernel_figs)):
-      tb_img_caption = ('Current dictionary (no renorm), fig ' + 
+      tb_img_caption = ('Current dictionary (no renorm), fig ' +
           str(fig_idx+1) + ' of ' + str(len(tiled_kernel_figs)))
       write_pyplot_to_tb_image(tiled_kernel_figs[fig_idx], tb_img_caption)
     del tiled_kernel_figs
