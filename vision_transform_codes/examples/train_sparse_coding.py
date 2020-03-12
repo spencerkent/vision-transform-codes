@@ -38,7 +38,7 @@ SC_PARAMS = {
       10*NUM_BATCHES: {'stepsize': 0.01, 'num_iters': 1},
       20*NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1}},
     'training_visualization_schedule': {
-      0: None, 1000: None, 2000: None, 4000: None, 8000: None, 
+      0: None, 1000: None, 2000: None, 4000: None, 8000: None,
       (NUM_EPOCHS * NUM_BATCHES) - 1: None,
       'reshaped_kernel_size': (PATCH_HEIGHT, PATCH_WIDTH)}}
 SC_PARAMS['training_visualization_schedule'].update(
@@ -65,11 +65,15 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 patch_dataset = create_patch_training_set(
-    ['whiten_center_surround', 'patch', 'center_each_component'],
+    ['divide_by_constant', 'whiten_center_surround', 'patch', 'center_each_patch'],
     (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
-                   'exclude': []})
+                   'exclude': [],
+                   'div_constant': 255.},
+    flatten_patches=True)
+
+
 #################################################################
 # save these to disk if you want always train on the same patches
 # or if you want to speed things up in the future

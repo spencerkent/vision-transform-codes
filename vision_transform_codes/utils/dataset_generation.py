@@ -9,11 +9,14 @@ import h5py
 from utils import image_processing as ip_util
 
 def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
-    batch_size, num_batches, edge_buffer, dataset, datasetparams):
+    batch_size, num_batches, edge_buffer, dataset, datasetparams,
+    flatten_patches=True):
   """
-  Creates a dataset of flattened image patches
+  Creates a dataset of image patches. Can be 'flattened' or not.
 
-  Used to train 'fully-connected' image transform codes
+  Flattened images are used to train the 'fully-connected transform codes while
+  unflattened patches (which have a height, width, and channel dimension) are
+  used to train convolutional transform codes.
 
   Parameters
   ----------
@@ -21,7 +24,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       Specifies the preprocessing operations to perform on the data. Currently
       available operations are
       ----
-      {'whiten_center_surround', 'whiten_ZCA', 'patch',
+      {'whiten_center_surround', 'whiten_ZCA', 'patch', 'pad',
        'center_each_component', 'center_each_patch',
        'normalize_component_variance', 'divide_by_constant',
        'shift_by_constant', 'local_contrast_nomalization'}.
@@ -40,29 +43,38 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       patches.
   dataset : str
       The name of the dataset to grab patches from. Currently one of
-      {'Field_NW', 'vanHateren', 'Kodak'}.
+      {'Field_NW', 'vanHateren', 'Kodak_BW'}.
   datasetparams : dictionary
       A dictionary of parameters that may be specific to the dataset. Currently
       just specifies the filepath of the data file and which images to
       exclude from the training set.
       'filepath' : str
       'exclude' : list(int)
-      'div_constant': float (only checked if divide_by_constant preproc)
-      'shift_constant': float (only checked if shift_by_constant preproc)
+      'div_constant': float (only checked if divide_by_constant preproc op)
+      'shift_constant': float (only checked if shift_by_constant preproc op)
+      'padding': tuple(tuple) (only checked in pad preproc op)
+  flatten_patches : bool
+      Flatten each patch into a vector, using the default behavior of Numpy's
+      .reshape() method. Used for training 'fully-connected' transform codes.
+      If False, we leave patches with height, width, and channel dimensions.
+      Default True.
 
   Returns
   -------
   return_dict : dictionary
-    'batched_patches' : ndarray(float32, size=(k, n, b))
-        The patches training set where k=num_batches,
-        n=patch_dimensions[0]*patch_dimensions[1], and b=batch_size. These are
-        patches ready to be sent to the gpu and consumed in PyTorch
+    'batched_patches' : ndarray(float32, size=(k, n, b) OR (k, b, pc, ph, pw))
+        The patches training set where pc=number of color channels in a patch,
+        ph=patch_dimensions[0], pw=patch_dimensions[1], k=num_batches,
+        b=batch_size, and n=pc*ph*pw. These are patches ready to be sent to
+        the gpu and consumed in PyTorch
     --- OPTIONAL RETURNS ---
-    'original_component_means' : ndarray(float32, size=(n,)), optional
+    'original_component_means' :
+      ndarray(float32, size=(n,) OR (pc, ph, pw)), optional
         If 'center_each_component' was requested as a preprocessing step we
         return the original component means so that future data can be
         processed using this same exact centering
-    'original_component_variances' : ndarray(float32, size=(n,)), optional
+    'original_component_variances' :
+      ndarray(float32, size=(n,) OR (pc, ph, pw)), optional
         If 'normalize_component_variance' was requested as a preprocessing step
         we return the original variances so that future data can be processed
         using this same exact normalization
@@ -86,7 +98,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
     unprocessed_images = pickle.load(open(datasetparams['filepath'], 'rb'))
     # this is a list of images, so that each image can be EITHER
     # 752x496 or 496x752, whichever makes it upright
-    unprocessed_images = [x.astype('float32')[:, :, None] 
+    unprocessed_images = [x.astype('float32')[:, :, None]
                           for x in unprocessed_images]
     #^ these should be float32 for further processing...
   elif dataset == 'Kodak':
@@ -116,8 +128,8 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       num_imgs = len(p_imgs)
 
       all_patches = np.zeros(
-        [patch_dimensions[0]*patch_dimensions[1]*num_color_channels,
-         num_batches*batch_size], dtype='float32')
+        [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
+         num_color_channels], dtype='float32')
 
       p_idx = 0
       for batch_idx in range(num_batches):
@@ -127,16 +139,16 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
                                        high=max_vert_pos[img_idx])
           horz_pos = np.random.randint(low=min_horz_pos[img_idx],
                                        high=max_horz_pos[img_idx])
-          all_patches[:, p_idx] = p_imgs[img_idx][
+          all_patches[p_idx] = p_imgs[img_idx][
             vert_pos:vert_pos+patch_dimensions[0],
-            horz_pos:horz_pos+patch_dimensions[1]].reshape(
-                [patch_dimensions[0]*patch_dimensions[1]*num_color_channels])
+            horz_pos:horz_pos+patch_dimensions[1]]
           p_idx += 1
         if batch_idx % 1000 == 0 and batch_idx != 0:
           print('Finished creating', batch_idx, 'batches')
       print('Done.')
       already_patched_flag = True
 
+    # TODO: change im proc to avoid having to reshape these each time
     elif preproc_op == 'whiten_center_surround':
       if already_patched_flag:
         raise KeyError('We typically preform this type of whitening before ' +
@@ -148,7 +160,9 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       if not already_patched_flag:
         raise KeyError('You ought to patch image before trying to compute a ' +
                        'ZCA whitening transform')
-      all_patches, computed_ZCA_params = ip_util.whiten_ZCA(all_patches)
+      temp_flat, computed_ZCA_params = ip_util.whiten_ZCA(
+          np.reshape(all_patches, (all_patches.shape[0], -1)).T)
+      all_patches = np.reshape(temp_flat.T, all_patches.shape)
 
     elif preproc_op == 'local_contrast_normalization':
       if already_patched_flag:
@@ -177,29 +191,49 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before trying to ' +
                        'center each component')
-      all_patches, component_means = ip_util.center_each_component(all_patches)
+      temp_flat, orig_means = ip_util.center_each_component(
+          np.reshape(all_patches, (all_patches.shape[0], -1)).T)
+      all_patches = np.reshape(temp_flat.T, all_patches.shape)
 
     elif preproc_op == 'normalize_component_variance':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before normalizing it')
-      all_patches, orig_variances = ip_util.normalize_component_variance(
-          all_patches)
+      temp_flat, orig_variances = ip_util.normalize_component_variance(
+          np.reshape(all_patches, (all_patches.shape[0], -1)).T)
+      all_patches = np.reshape(temp_flat.T, all_patches.shape)
 
     elif preproc_op == 'center_each_patch':
       if not already_patched_flag:
         raise KeyError('You ought to patch the data before trying to ' +
                        'center each patch')
-      all_patches, _ = ip_util.center_each_sample(all_patches)
+      temp_flat, _ = ip_util.center_each_sample(
+          np.reshape(all_patches, (all_patches.shape[0], -1)).T)
+      all_patches = np.reshape(temp_flat.T, all_patches.shape)
 
+    elif preproc_op == 'pad':
+      if not already_patched_flag:
+        raise KeyError('You ought to patch the data first. Padding is added '+
+                       'to the patches')
+      if flatten_patches:
+        raise KeyError('Flattend patches shouldnt require padding')
+      all_patches = np.pad(all_patches, 
+          ((0, 0),) + datasetparams['padding'] + ((0, 0),), mode='constant',
+          constant_values=0.)
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)
 
   # now we finally chunk this up into batches and return
-  return_dict = {'batched_patches': all_patches.T.reshape(
-                    (num_batches, batch_size, -1)).transpose((0, 2, 1))}
-                 #^ size=(k, n, b)
+  if flatten_patches:
+    return_dict = {'batched_patches': np.moveaxis(
+      all_patches.reshape((num_batches, batch_size, -1)), 1, 2)}
+  else:
+    # torch uses a color-channel-first convention so we reshape to reflect this
+    return_dict = {'batched_patches': np.moveaxis(
+      all_patches.reshape((num_batches, batch_size) + all_patches.shape[1:]),
+      4, 2)}
+
   if 'center_each_component' in order_of_preproc_ops:
-    return_dict['original_component_means'] = component_means
+    return_dict['original_component_means'] = orig_means
   if 'normalize_component_variance' in order_of_preproc_ops:
     return_dict['original_component_variances'] = orig_variances
   if 'whiten_ZCA' in order_of_preproc_ops:
