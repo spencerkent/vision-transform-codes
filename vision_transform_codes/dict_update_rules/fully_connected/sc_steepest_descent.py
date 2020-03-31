@@ -13,14 +13,14 @@ def run(images, dictionary, codes, stepsize=0.001, num_iters=1,
 
   Parameters
   ----------
-  images : torch.Tensor(float32, size=(n, b))
+  images : torch.Tensor(float32, size=(b, n))
       An array of images (probably just small patches) that we want to find the
       sparse code for. n is the size of each image and b is the number of
       images in this batch
-  dictionary : torch.Tensor(float32, size=(n, s))
+  dictionary : torch.Tensor(float32, size=(s, n))
       This is the dictionary of basis functions that we can use to descibe the
       images. n is the size of each image and s in the size of the code.
-  codes : torch.Tensor(float32, size=(s, b))
+  codes : torch.Tensor(float32, size=(b, s))
       This is the current set of codes for a batch of images. s is the
       dimensionality of the code and b is the number of images in the batch
   stepsize : torch.Tensor(float32), optional
@@ -35,7 +35,7 @@ def run(images, dictionary, codes, stepsize=0.001, num_iters=1,
   # TODO: consider normalizing the gradient to be on the same scale as the
   #       dictionary. This makes the stepsize dimensionless
   for iter_idx in range(num_iters):
-    dictionary.sub_(stepsize * torch.mm(torch.mm(dictionary, codes) - images,
-                                        codes.t()) / codes.size(1))
+    dictionary.sub_(stepsize * (torch.mm(
+      codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0)))
     if normalize_dictionary:
-      dictionary.div_(dictionary.norm(p=2, dim=0))
+      dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])

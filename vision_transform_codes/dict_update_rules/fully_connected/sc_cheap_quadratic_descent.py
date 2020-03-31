@@ -15,14 +15,14 @@ def run(images, dictionary, codes, hessian_diagonal, stepsize=0.001,
 
   Parameters
   ----------
-  images : torch.Tensor(float32, size=(n, b))
+  images : torch.Tensor(float32, size=(b, n))
       An array of images (probably just small patches) that we want to find the
       sparse code for. n is the size of each image and b is the number of
       images in this batch
-  dictionary : torch.Tensor(float32, size=(n, s))
+  dictionary : torch.Tensor(float32, size=(s, n))
       This is the dictionary of basis functions that we can use to descibe the
       images. n is the size of each image and s in the size of the code.
-  codes : torch.Tensor(float32, size=(s, b))
+  codes : torch.Tensor(float32, size=(b, s))
       This is the current set of codes for a batch of images. s is the
       dimensionality of the code and b is the number of images in the batch
   hessian_diagonal : torch.Tensor(float32, size=(s,))
@@ -40,9 +40,9 @@ def run(images, dictionary, codes, hessian_diagonal, stepsize=0.001,
       before we return. Default True.
   """
   for iter_idx in range(num_iters):
-    dict_update = stepsize * torch.mm(torch.mm(dictionary, codes) - images,
-                                      codes.t()) / codes.size(1)
-    dict_update.div_(hessian_diagonal + lowest_code_val)
+    dict_update = stepsize * (torch.mm(
+      codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0))
+    dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
     dictionary.sub_(dict_update)
     if normalize_dictionary:
-      dictionary.div_(dictionary.norm(p=2, dim=0))
+      dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])

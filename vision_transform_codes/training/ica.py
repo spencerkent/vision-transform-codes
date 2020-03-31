@@ -22,7 +22,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       return us a batch of images. If image_dataset is a torch Tensor, that
       means ALL of the data is stored in the CPU's RAM or in the GPU's RAM. The
       choice of which will have already been made when the Tensor is created.
-      The tensor is an array of size (k, n, b) where k is the total number of
+      The tensor is an array of size (k, b, n) where k is the total number of
       batches, n is the (flattened) size of each image, and b is the size of
       an individual batch. If image_dataset is a torch.DataLoader that means
       each time we make a __getitem__ call it will return a batch of images
@@ -77,11 +77,11 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     batch_sig_mag = np.max(batch_images_np) - np.min(batch_images_np)
     #^ psnr depends on the range of the data which we just estimate from
     #  this batch.
-    recons = torch.mm(dictionary, codes).cpu().numpy()
+    recons = torch.mm(codes, dictionary).cpu().numpy()
     recon_psnr = []
-    for b_idx in range(recons.shape[1]):
-      psnr = compute_pSNR(batch_images_np[:, b_idx],
-                          recons[:, b_idx], manual_sig_mag=batch_sig_mag)
+    for b_idx in range(recons.shape[0]):
+      psnr = compute_pSNR(batch_images_np[b_idx, :],
+                          recons[b_idx, :], manual_sig_mag=batch_sig_mag)
       if psnr != np.inf:
         recon_psnr.append(psnr)
     avg_recon_psnr = np.mean(recon_psnr)
@@ -189,8 +189,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
   else:
     raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
 
-  image_flatsize = image_dataset[0].shape[0]
-  batch_size = image_dataset[0].shape[1]
+  batch_size = image_dataset[0].shape[0]
   num_batches = len(image_dataset)
   ##################################
   # Done w/ setup and error checking
@@ -242,11 +241,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
     # we need to reshuffle the batches if we're not using a DataLoader
     if type(image_dataset) == torch.Tensor:
-      # because of PyTorch's assumption of row-first reshaping this is a little
-      # uglier than I would like...
-      image_dataset = image_dataset.permute(0, 2, 1).reshape(-1,
-          image_flatsize)[torch.randperm(num_batches * batch_size)].reshape(
-              -1, batch_size, image_flatsize).permute(0, 2, 1)
+      image_dataset = image_dataset.reshape(
+          (-1,) + tuple(image_dataset.shape[2:]))[torch.randperm(
+            num_batches * batch_size)].reshape(image_dataset.shape)
 
     print("Epoch", epoch_idx, "finished")
     # let's make sure we release any unreferenced tensor to make their memory

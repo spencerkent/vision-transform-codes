@@ -33,7 +33,7 @@ ICA_PARAMS = {
       5 * NUM_BATCHES: {'stepsize': 0.0025, 'num_iters': 1},
       7 * NUM_BATCHES: {'stepsize': 0.001, 'num_iters': 1}},
     'training_visualization_schedule': {
-      0: None, 1000: None, 2000: None, 4000: None, 8000: None, 
+      0: None, 1000: None, 2000: None, 4000: None, 8000: None,
       (NUM_EPOCHS * NUM_BATCHES) - 1: None,
       'reshaped_kernel_size': (PATCH_HEIGHT, PATCH_WIDTH)}}
 ICA_PARAMS['training_visualization_schedule'].update(
@@ -80,8 +80,8 @@ image_patches_gpu = torch.from_numpy(
     patch_dataset['batched_patches']).to(torch_device)
 
 # create the dictionary Tensor on the GPU
-Q, R = np.linalg.qr(np.random.standard_normal((PATCH_HEIGHT*PATCH_WIDTH,
-                                               CODE_SIZE)))
+Q, R = np.linalg.qr(np.random.standard_normal((CODE_SIZE,
+                                               PATCH_HEIGHT*PATCH_WIDTH)))
 ica_dictionary = torch.from_numpy(Q.astype('float32')).to(torch_device)
 
 print("Here we go!")

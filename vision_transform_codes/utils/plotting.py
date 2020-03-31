@@ -48,8 +48,8 @@ def display_dictionary(dictionary, reshaping=None,
 
   Parameters
   ----------
-  dictionary : ndarray(float32, size=(n, s) OR (s, c, kh, kw))
-      If the size of dictionary is (n, s), this is a 'fully-connected'
+  dictionary : ndarray(float32, size=(s, n) OR (s, c, kh, kw))
+      If the size of dictionary is (s, n), this is a 'fully-connected'
       dictionary where each basis element has the same dimensionality as the
       image it is trying to represent. n is the size of the image and s the
       number of basis functions. If the size of dictionary is (s, c, kh, kw),
@@ -65,8 +65,8 @@ def display_dictionary(dictionary, reshaping=None,
       The title of the plot. Default ""
   renormalize : bool, optional
       If present, renormalize each basis function to the interval [0, 1] before
-      displaying. Otherwise they are displayed on their original scale. Default
-      True
+      displaying. Otherwise they are displayed on their original scale.
+      Default True.
 
   Returns
   -------
@@ -104,7 +104,7 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
 
   Parameters
   ----------
-  dictionary : ndarray(float32, size=(n, s) OR (s, c, kh, kw))
+  dictionary : ndarray(float32, size=(s, n) OR (s, c, kh, kw))
       See docstring of display_dictionary below.
   renormalize : bool
       If true, renormalize the pixel values for each basis function to the
@@ -120,7 +120,7 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
   """
   max_de_per_img = 80*80  # max 80x80 {d}ictionary {e}lements per tile img
   assert np.sqrt(max_de_per_img) % 1 == 0, 'please pick a square number'
-  num_de = dictionary.shape[1] if dictionary.ndim == 2 else dictionary.shape[0]
+  num_de = dictionary.shape[0]
   num_tile_imgs = int(np.ceil(num_de / max_de_per_img))
   # this determines how many dictionary elements are arranged in a square
   # grid within any given img
@@ -164,7 +164,7 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
     while img_de_idx < de_per_img and de_idx < num_de:
 
       if dictionary.ndim == 2:
-        this_de = dictionary[:, de_idx]
+        this_de = dictionary[de_idx, :]
         this_de = this_de.reshape(basis_elem_size)
       else:
         this_de = np.moveaxis(dictionary[de_idx], 0, 2)
@@ -195,7 +195,7 @@ def display_codes(codes, plot_title=""):
 
   Parameters
   ----------
-  codes : ndarray(float32, size=(s, B))
+  codes : ndarray(float32, size=(B, s))
       The codes for a batch of size B. B shouldn't be too large unless you want
       to wait around all day for this to finish.
   plot_title : str, optional
@@ -207,8 +207,8 @@ def display_codes(codes, plot_title=""):
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  code_size = codes.shape[0]
-  num_codes = codes.shape[1]
+  num_codes = codes.shape[0]
+  code_size = codes.shape[1]
   max_data_pt_per_fig = 40
   num_code_figs = int(np.ceil(num_codes / max_data_pt_per_fig))
   if num_code_figs > 1:
@@ -227,11 +227,12 @@ def display_codes(codes, plot_title=""):
       if dpt_idx % 25 == 0:
         print('plotted', dpt_idx, 'of', num_codes, 'codes')
       _, linerefs, _ = ax[fig_dpt_idx].stem(np.arange(code_size),
-          codes[:, dpt_idx], linefmt='-', markerfmt=' ')
+          codes[dpt_idx, :], linefmt='-', markerfmt=' ', 
+          use_line_collection=True)
       plt.setp(linerefs, 'color', tab10colors[0])
       ax[fig_dpt_idx].text(0.1, 0.5, 'L0: {:.2f}, L1: {:.1f}'.format(
-        np.sum(codes[:, dpt_idx] != 0) / codes.shape[0],
-        np.sum(np.abs(codes[:, dpt_idx]))))
+        np.sum(codes[dpt_idx, :] != 0) / code_size,
+        np.sum(np.abs(codes[dpt_idx, :]))))
       fig_dpt_idx += 1
       dpt_idx += 1
     code_figs.append(fig)
@@ -246,7 +247,7 @@ def display_code_marginal_densities(codes, num_hist_bins,
 
   Parameters
   ----------
-  codes : ndarray(float32, size=(s, D))
+  codes : ndarray(float32, size=(D, s))
       The codes for a dataset of size D. These are the vectors x for each sample
       from the dataset. The value s is the dimensionality of the code
   num_hist_bins : int
@@ -276,7 +277,7 @@ def display_code_marginal_densities(codes, num_hist_bins,
     fig.suptitle(plot_title, fontsize=15)
     ax = plt.subplot(1, 1, 1)
     blue=plt.get_cmap('Blues')
-    cmap_indeces = np.linspace(0.25, 1.0, codes.shape[0])
+    cmap_indeces = np.linspace(0.25, 1.0, codes.shape[1])
 
     histogram_min = np.min(codes)
     histogram_max = np.max(codes)
@@ -284,8 +285,8 @@ def display_code_marginal_densities(codes, num_hist_bins,
                                       num_hist_bins + 1)
     histogram_bin_centers = (histogram_bin_edges[:-1] +
                              histogram_bin_edges[1:]) / 2
-    for de_idx in range(codes.shape[0]):
-      counts, _ = np.histogram(codes[de_idx], histogram_bin_edges)
+    for de_idx in range(codes.shape[1]):
+      counts, _ = np.histogram(codes[:, de_idx], histogram_bin_edges)
       empirical_density = counts / np.sum(counts)
       if lines:
         ax.plot(histogram_bin_centers, empirical_density,
@@ -303,7 +304,7 @@ def display_code_marginal_densities(codes, num_hist_bins,
     # every coefficient gets its own subplot
     max_de_per_fig = 80*80  # max 80x80 {d}ictionary {e}lements displayed each fig
     assert np.sqrt(max_de_per_fig) % 1 == 0, 'please pick a square number'
-    num_de = codes.shape[0]
+    num_de = codes.shape[1]
     num_de_figs = int(np.ceil(num_de / max_de_per_fig))
     # this determines how many dictionary elements are aranged in a square
     # grid within any given figure
@@ -329,16 +330,16 @@ def display_code_marginal_densities(codes, num_hist_bins,
         if de_idx % 100 == 0:
           print('plotted', de_idx, 'of', num_de, 'code coefficients')
         ax = plt.Subplot(fig, subplot_grid[fig_de_idx])
-        histogram_min = min(codes[de_idx, :])
-        histogram_max = max(codes[de_idx, :])
+        histogram_min = min(codes[:, de_idx])
+        histogram_max = max(codes[:, de_idx])
         histogram_bin_edges = np.linspace(histogram_min, histogram_max,
                                           num_hist_bins + 1)
         histogram_bin_centers = (histogram_bin_edges[:-1] +
                                  histogram_bin_edges[1:]) / 2
-        counts, _ = np.histogram(codes[de_idx, :], histogram_bin_edges)
+        counts, _ = np.histogram(codes[:, de_idx], histogram_bin_edges)
         empirical_density = counts / np.sum(counts)
         max_density = np.max(empirical_density)
-        variance = np.var(codes[de_idx, :])
+        variance = np.var(codes[:, de_idx])
         hist_kurtosis = kurtosis(empirical_density, fisher=False)
 
         if lines:

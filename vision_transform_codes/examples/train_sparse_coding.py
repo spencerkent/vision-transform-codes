@@ -65,12 +65,11 @@ torch.cuda.set_device(1)
 
 # manually create large training set with one million whitened patches
 patch_dataset = create_patch_training_set(
-    ['divide_by_constant', 'whiten_center_surround', 'patch', 'center_each_patch'],
+    ['whiten_center_surround', 'patch', 'center_each_patch'],
     (PATCH_HEIGHT, PATCH_WIDTH), BATCH_SIZE, NUM_BATCHES ,
     edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
-                   'exclude': [],
-                   'div_constant': 255.},
+                   'exclude': []},
     flatten_patches=True)
 
 
@@ -87,9 +86,9 @@ image_patches_gpu = torch.from_numpy(
     patch_dataset['batched_patches']).to(torch_device)
 
 # create the dictionary Tensor on the GPU
-sparse_coding_dictionary = torch.randn((PATCH_HEIGHT*PATCH_WIDTH, CODE_SIZE),
+sparse_coding_dictionary = torch.randn((CODE_SIZE, PATCH_HEIGHT*PATCH_WIDTH),
                                        device=torch_device)
-sparse_coding_dictionary.div_(sparse_coding_dictionary.norm(p=2, dim=0))
+sparse_coding_dictionary.div_(sparse_coding_dictionary.norm(p=2, dim=1))
 
 print("Here we go!")
 sc_train(image_patches_gpu, sparse_coding_dictionary, SC_PARAMS)

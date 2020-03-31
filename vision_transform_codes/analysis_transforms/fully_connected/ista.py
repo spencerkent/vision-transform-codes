@@ -21,10 +21,10 @@ def run(images, dictionary, sparsity_weight, num_iters,
 
   Parameters
   ----------
-  images : torch.Tensor(float32, size=(n, b))
+  images : torch.Tensor(float32, size=(b, n))
       An batch of images (probably just small patches) that we want to find the
       sparse code for. n is the size of each image and b is the number of imgs.
-  dictionary : torch.Tensor(float32, size=(n, s))
+  dictionary : torch.Tensor(float32, size=(s, n))
       This is the dictionary of basis functions that we can use to describe the
       images. n is the size of each image and s in the size of the code.
   sparsity_weight : torch.Tensor(float32)
@@ -32,7 +32,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
       function. It is often denoted as \lambda
   num_iters : int
       Number of steps of ISTA to run.
-  initial_codes : torch.Tensor(float32, size=(s, b)), optional
+  initial_codes : torch.Tensor(float32, size=(b, s)), optional
       Start with these initial values when computing the codes. Default None.
   early_stopping_epsilon : float, optional
       Terminate if code changes by less than this amount per component,
@@ -46,12 +46,12 @@ def run(images, dictionary, sparsity_weight, num_iters,
 
   Returns
   -------
-  codes : torch.Tensor(float32, size=(s, b))
+  codes : torch.Tensor(float32, size=(b, s))
       The set of codes for this set of images. s is the code size and b in the
       batch size.
   """
   # We can take the stepsize from the largest eigenvalue of the Gram matrix,
-  # dictionary.T @ dictionary. We only need to compute this once, here. This
+  # dictionary @ dictionary.T. We only need to compute this once, here. This
   # guarantees convergence but may be a bit conservative and also could be
   # expensive to compute. The matrix is of size (s, s), and s >= n,
   # so we can use the smaller covariance matrix of size (n, n), which will
@@ -59,16 +59,16 @@ def run(images, dictionary, sparsity_weight, num_iters,
   # find the stepsize, but in my experience this does not work well.
   try:
     lipschitz_constant = torch.symeig(
-        torch.mm(dictionary, dictionary.t()))[0][-1]
+        torch.mm(dictionary.t(), dictionary))[0][-1]
   except RuntimeError:
     print('symeig threw an exception. Likely due to one of the dictionary',
           'elements overflowing. The norm of each dictionary element is')
-    print(torch.norm(dictionary, dim=0, p=2))
+    print(torch.norm(dictionary, dim=1, p=2))
     raise RuntimeError()
   stepsize = 1. / lipschitz_constant
 
   if initial_codes is None:
-    codes = images.new_zeros(dictionary.size(1), images.size(1))
+    codes = images.new_zeros(images.size(0), dictionary.size(0))
   else:
     codes = initial_codes  # warm restart, we'll begin with these values
 
@@ -80,9 +80,9 @@ def run(images, dictionary, sparsity_weight, num_iters,
   while (iter_idx < num_iters and not stop_early):
 
     ###### Proximal step #######
-    # gradient of l2 term is <dictionary^T, (<dictionary, codes> - images)>
-    codes.sub_(stepsize * torch.mm(dictionary.t(),
-                                   torch.mm(dictionary, codes) - images))
+    # gradient of l2 term is <(<codes, dictionary> - images), dictionary.T>
+    codes.sub_(stepsize * torch.mm(torch.mm(codes, dictionary) - images),
+                                   dictionary.t())
     if nonnegative_only:
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       #^ shifted rectified linear activation

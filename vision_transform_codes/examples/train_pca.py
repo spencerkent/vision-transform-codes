@@ -40,7 +40,7 @@ one_mil_image_patches = create_patch_training_set(
     ['patch', 'center_each_component'], (PATCH_HEIGHT, PATCH_WIDTH),
     NUM_IMAGES_TRAIN, 1, edge_buffer=5, dataset=script_args.data_id,
     datasetparams={'filepath': script_args.data_filepath,
-                   'exclude': []})['batched_patches']
+                   'exclude': []})['batched_patches'][0]
 
 #################################################################
 # save these to disk if you want always train on the same patches
@@ -54,13 +54,12 @@ one_mil_image_patches = create_patch_training_set(
 # we are going to 'unbatch' them because pca will train on the whole dataset
 # at once
 image_patches_gpu = torch.from_numpy(
-    one_mil_image_patches.transpose((0, 2, 1)).reshape(
-      (-1, PATCH_HEIGHT*PATCH_WIDTH)).T).to(torch_device)
+    one_mil_image_patches).to(torch_device)
 
 pca_dictionary = pca_train(image_patches_gpu)
 codes = invertible_linear.run(image_patches_gpu, pca_dictionary, orthonormal=True)
 
-plots = display_dictionary(pca_dictionary.cpu().numpy(),
+plots = display_dictionary(pca_dictionary.cpu().numpy().T,
     (16, 16), 'PCA-determined basis functions, w/o renormalization',
     renormalize=False)
 

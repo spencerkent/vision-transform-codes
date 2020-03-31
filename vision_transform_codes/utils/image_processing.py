@@ -190,7 +190,7 @@ def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
 
   Parameters
   ----------
-  flat_data : ndarray(float32 or uint8, size=(n, D))
+  flat_data : ndarray(float32 or uint8, size=(D, n))
       n is the dimensionality of a single datapoint and D is the size of the
       dataset to which we are applying the ZCA transform (independently to
       each sample). We may also be using this dataset to estimate the ZCA
@@ -200,7 +200,7 @@ def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
       None, we will compute these based on flat_data. Default None.
       'PCA_basis' : ndarray(float32, size=(n, n))
         The principal components transform matrix meant to be applied with a
-        left inner product to new data
+        right inner product to new data
       'PCA_axis_variances' : ndarray(float32, size=(n,))
           The estimated variance of data on each of the n princpal axes.
       'subtracted_mean' : float32
@@ -208,7 +208,7 @@ def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
 
   Returns
   -------
-  whitened_data : ndarray(float32, size=(n, D))
+  whitened_data : ndarray(float32, size=(D, n))
       The data, now whitened
   ZCA_parameters : dictionary, if precomputed_ZCA_parameters is None
       The parameters of a ZCA transform that we estimate from flat_data.
@@ -225,14 +225,14 @@ def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
   # ../training/pca.py and ../analysis_transforms/invertible_linear.py, but
   # I'm trying to make this portable and numpy/pythonic, so we'll do it
   # manually here
-  num_components = flat_data.shape[0]
-  num_samples = flat_data.shape[1]
+  num_samples = flat_data.shape[0]
+  num_components = flat_data.shape[1]
   if precomputed_ZCA_parameters is None:
     if num_components > 0.1 * num_samples:
       raise RuntimeError('Number of samples is way too small to estimate PCA')
     meanzero_flat_data, component_means = center_each_component(flat_data)
     U, w, _ = np.linalg.svd(
-        np.dot(meanzero_flat_data, meanzero_flat_data.T) / num_samples,
+        np.dot(meanzero_flat_data.T, meanzero_flat_data) / num_samples,
         full_matrices=True)
     # ^way faster to estimate based on the n x n covariance matrix
     ZCA_parameters = {'PCA_basis': U, 'PCA_axis_variances': w,
@@ -251,9 +251,9 @@ def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
     meanzero_flat_data = flat_data - ZCA_parameters['subtracted_mean']
 
   meanzero_white_data = np.dot(
-      ZCA_parameters['PCA_basis'],
-      (np.dot(ZCA_parameters['PCA_basis'].T, meanzero_flat_data) /
-       (np.sqrt(ZCA_parameters['PCA_axis_variances']) + 1e-4)[:, None]))
+      np.dot(meanzero_flat_data, ZCA_parameters['PCA_basis']) /
+      (np.sqrt(ZCA_parameters['PCA_axis_variances']) + 1e-4)[None, :],
+      ZCA_parameters['PCA_basis'].T)
 
   white_data = (meanzero_white_data.astype('float32') +
                 ZCA_parameters['subtracted_mean'])
@@ -270,17 +270,15 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
 
   Parameters
   ----------
-  flat_data : ndarray(float32, size=(n, D))
+  white_flat_data : ndarray(float32, size=(D, n))
       n is the dimensionality of a single datapoint and D is the size of the
       dataset to which we are applying the ZCA transform (independently to
-      each sample). We may also be using this dataset to estimate the ZCA
-      whitening transform in the first place.
-  precomputed_ZCA_parameters : dictionary, optional
-      The parameters of a ZCA transform that have already been estimated. If
-      None, we will compute these based on flat_data. Default None.
+      each sample).
+  precomputed_ZCA_parameters : dictionary
+      The parameters of a ZCA transform that have already been estimated.
       'PCA_basis' : ndarray(float32, size=(n, n))
         The principal components transform matrix meant to be applied with a
-        left inner product to new data
+        right inner product to new flat data
       'PCA_axis_variances' : ndarray(float32, size=(n,))
           The estimated variance of data on each of the n princpal axes.
       'subtracted_mean' : float32
@@ -288,17 +286,16 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
 
   Returns
   -------
-  colored_data : ndarray(float32, size=(n, D))
+  colored_data : ndarray(float32, size=(D, n))
       The data, with whitening operation undone
   """
   assert white_flat_data.dtype == 'float32'
   meanzero_white_data = (white_flat_data -
                          precomputed_ZCA_parameters['subtracted_mean'])
   meanzero_colored_data = np.dot(
-      precomputed_ZCA_parameters['PCA_basis'],
-      (np.dot(precomputed_ZCA_parameters['PCA_basis'].T, meanzero_white_data) *
-       (np.sqrt(precomputed_ZCA_parameters['PCA_axis_variances'])
-        + 1e-4)[:, None]))
+      np.dot(meanzero_white_data, precomputed_ZCA_parameters['PCA_basis']) *
+      (np.sqrt(precomputed_ZCA_parameters['PCA_axis_variances']) + 1e-4)[None, :],
+      precomputed_ZCA_parameters['PCA_basis'].T)
 
   colored_data = (meanzero_colored_data.astype('float32') +
                   precomputed_ZCA_parameters['subtracted_mean'])
@@ -396,21 +393,21 @@ def center_each_component(flat_data):
 
   Parameters
   ----------
-  flat_data : ndarray(float32 or uint8, size=(n, D))
+  flat_data : ndarray(float32 or uint8, size=(D, n))
       n is the dimensionality of a single datapoint and D is the size of the
       dataset over which we are taking the mean.
 
   Returns
   -------
-  centered_data : ndarray(float32, size=(n, D))
+  centered_data : ndarray(float32, size=(D, n))
       The data, now with mean 0 in each component
   original_means : ndarray(float32, size=(n,))
       The componentwise means of the original data. Can be used to
       uncenter the data later (for instance, after dictionary learning)
   """
   assert flat_data.dtype in ['float32', 'uint8']
-  original_means = np.mean(flat_data, axis=1)
-  return (flat_data - original_means[:, None]).astype('float32'), original_means
+  original_means = np.mean(flat_data, axis=0)
+  return (flat_data - original_means[None, :]).astype('float32'), original_means
 
 
 def center_each_sample(flat_data):
@@ -419,21 +416,21 @@ def center_each_sample(flat_data):
 
   Parameters
   ----------
-  flat_data : ndarray(float32 or uint8, size=(n, D))
+  flat_data : ndarray(float32 or uint8, size=(D, n))
       n is the dimensionality of a single datapoint and D is the size of the
       dataset over which we are taking the mean.
 
   Returns
   -------
-  zero_dc_data : ndarray(float32, size=(n, D))
+  zero_dc_data : ndarray(float32, size=(D, n))
       The data, now with a DC value of zero
   original_means : ndarray(float32, size=(n,))
       The patch-specific DC values of the original data. Can be used to
       uncenter the data later (for instance, after dictionary learning)
   """
   assert flat_data.dtype in ['float32', 'uint8']
-  original_means = np.mean(flat_data, axis=0)
-  return (flat_data - original_means[None, :]).astype('float32'), original_means
+  original_means = np.mean(flat_data, axis=1)
+  return (flat_data - original_means[:, None]).astype('float32'), original_means
 
 
 def normalize_component_variance(flat_data):
@@ -442,25 +439,25 @@ def normalize_component_variance(flat_data):
 
   Parameters
   ----------
-  flat_data : ndarray(float32 or uint8, size=(n, D))
+  flat_data : ndarray(float32 or uint8, size=(D, n))
       n is the dimensionality of a single datapoint and D is the size of the
       dataset over which we are taking the variance.
 
   Returns
   -------
-  normalized_data : ndarray(float32 size=(n, D))
+  normalized_data : ndarray(float32 size=(D, n))
       The data, now with variance
   original_variances : ndarray(float32, size=(n,))
       The componentwise variances of the original data. Can be used to
       unnormalize the data later (for instance, after dictionary learning)
   """
   assert flat_data.dtype in ['float32', 'uint8']
-  original_variances = np.var(flat_data, axis=1)
-  return ((flat_data / np.sqrt(original_variances)[:, None]).astype('float32'),
+  original_variances = np.var(flat_data, axis=0)
+  return ((flat_data / np.sqrt(original_variances)[None, :]).astype('float32'),
           original_variances)
 
 
-def patches_from_single_image(image, patch_dimensions):
+def patches_from_single_image(image, patch_dimensions, flatten_patches):
   """
   Extracts tiled patches from a single image
 
@@ -470,37 +467,47 @@ def patches_from_single_image(image, patch_dimensions):
       An image of height h and width w, with c color channels
   patch_dimensions : tuple(int, int)
       The size in pixels of each patch
+  flatten_patches : bool
+      Indicates whether to flatten the patches or leave them in
+      (ph, pw, c) format.
 
   Returns
   -------
-  patches : ndarray(float32, size=(ph*pw*c, k))
-      An array of flattened patches each of height ph and width pw. k is the
+  patches : ndarray(float32, size=(k, ph*pw*c) OR (k, ph, pw, c))
+      An array of patches each of height ph and width pw. k is the
       number of total patches that were extracted from the full image
   patch_positions : list(tuple(int, int))
       The position in pixels of the upper-left-hand corner of each patch within
-      the full image. Used to retile the full image after processing the patches
+      the full image. Used to re-tile the full image after processing
+      the patches
   """
-  assert image.shape[0] / patch_dimensions[0] % 1 == 0
-  assert image.shape[1] / patch_dimensions[1] % 1 == 0
   assert image.dtype in ['float32', 'uint8']
+  assert image.ndim == 3
+  if (image.shape[0] / patch_dimensions[0] % 1 != 0 or
+      image.shape[1] / patch_dimensions[1] % 1 != 0):
+    print('Warning: image cannot be completely patched with these dimensions.',
+          'Ignoring overflow pixels on the right and bottom of image')
 
   num_patches_vert = image.shape[0] // patch_dimensions[0]
   num_patches_horz = image.shape[1] // patch_dimensions[1]
-  patch_flatsize = patch_dimensions[0] * patch_dimensions[1] * image.shape[2]
+  patches = np.zeros([num_patches_vert * num_patches_horz,
+                      patch_dimensions[0], patch_dimensions[1],
+                      image.shape[2]], dtype=image.dtype)
   patch_positions = []  # keep track of where each patch belongs
-  patches = np.zeros([patch_flatsize, num_patches_vert * num_patches_horz],
-                     dtype=image.dtype)
   p_idx = 0
   for patch_idx_vert in range(num_patches_vert):
     for patch_idx_horz in range(num_patches_horz):
       pos_vert = patch_idx_vert * patch_dimensions[0]
       pos_horz = patch_idx_horz * patch_dimensions[1]
-      patches[:, p_idx] = image[
-          pos_vert:pos_vert+patch_dimensions[0],
-          pos_horz:pos_horz+patch_dimensions[1]].reshape((patch_flatsize,))
+      patches[p_idx] = image[pos_vert:pos_vert+patch_dimensions[0],
+                             pos_horz:pos_horz+patch_dimensions[1]]
       patch_positions.append((pos_vert, pos_horz))
       #^ upper left hand corner position in pixels in the original image
       p_idx += 1
+
+  if flatten_patches:
+    patches = patches.reshape((patches.shape[0], -1))
+
   return patches, patch_positions
 
 
@@ -510,8 +517,8 @@ def assemble_image_from_patches(patches, patch_dimensions, patch_positions):
 
   Parameters
   ----------
-  patches : ndarray(float32 or uint8, size=(ph*pw*c, k))
-      An array of flattened patches each of height ph and width pw. k is the
+  patches : ndarray(float32 or uint8, size=(k, ph*pw*c) OR (k, ph, pw, c))
+      An array of patches each of height ph and width pw. k is the
       number of total patches that were extracted from the full image
   patch_dimensions : tuple(int, int)
       The size in pixels of each patch
@@ -530,18 +537,26 @@ def assemble_image_from_patches(patches, patch_dimensions, patch_positions):
                      patch_dimensions[0])
   full_img_width = (np.max([x[1] for x in patch_positions]) +
                     patch_dimensions[1])
-  inferred_num_color_channels = (patches.shape[0] /
-                                 (patch_dimensions[0]*patch_dimensions[1]))
-  assert inferred_num_color_channels % 1.0 == 0
-  inferred_num_color_channels = int(inferred_num_color_channels)
-  reshaped_patch_shape = patch_dimensions + (inferred_num_color_channels,)
+  if patches.ndim == 2:
+    # flattened patches
+    num_color_channels = (patches.shape[1] /
+                          (patch_dimensions[0]*patch_dimensions[1]))
+    assert num_color_channels % 1.0 == 0
+    num_color_channels = int(num_color_channels)
+  else:
+    num_color_channels = patches.shape[-1]
 
   full_img = np.zeros([full_img_height, full_img_width,
-                       inferred_num_color_channels], dtype=patches.dtype)
-  for patch_idx in range(patches.shape[1]):
+                       num_color_channels], dtype=patches.dtype)
+  for patch_idx in range(patches.shape[0]):
     vert = patch_positions[patch_idx][0]
     horz = patch_positions[patch_idx][1]
-    full_img[vert:vert+patch_dimensions[0], horz:horz+patch_dimensions[1]] = \
-        patches[:, patch_idx].reshape(reshaped_patch_shape)
+    if patches.ndim == 2:
+      full_img[vert:vert+patch_dimensions[0], horz:horz+patch_dimensions[1]] = \
+          patches[patch_idx, :].reshape(
+              (patch_dimensions[0], patch_dimensions[1], num_color_channels))
+    else:
+      full_img[vert:vert+patch_dimensions[0], horz:horz+patch_dimensions[1]] = \
+          patches[patch_idx, :]
 
   return full_img

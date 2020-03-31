@@ -9,7 +9,7 @@ def run(images, dictionary, orthonormal=False):
 
   Parameters
   ----------
-  images : torch.Tensor(float32, size=(n, b))
+  images : torch.Tensor(float32, size=(b, n))
       An array of images (probably just small patches) to find the direct
       linear code for. n is the size of each image and b is the number
       of images in this batch
@@ -21,6 +21,6 @@ def run(images, dictionary, orthonormal=False):
       computational and numerical reasons. Default False.
   """
   if orthonormal:
-    return torch.mm(dictionary.t(), images)
+    return torch.mm(images, dictionary.t())
   else:
-    return torch.mm(torch.inverse(dictionary), images)
+    return torch.mm(images, torch.inverse(dictionary))

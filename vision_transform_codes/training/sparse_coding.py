@@ -1,7 +1,6 @@
 """
 This implements sparse coding dictionary learning
 """
-
 import time
 import torch
 
@@ -11,8 +10,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
   The inputs should vary in their dimensions depending on whether one desires
   fully-connected or convolutional sparse coding. The index ordering convention
-  we use is different in the two cases, in order accomodate PyTorch's indexing
-  convention and make the code a bit cleaner.
+  we use is sample index first, in order accomodate PyTorch's indexing
+  convention and make the code a bit cleaner. In the fully-connected case this
+  differs (by a transpose) compared to how the math is typically written.
 
   Parameters
   ----------
@@ -23,7 +23,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       choice of which will have already been made when the Tensor is created.
       ****
       If fully-connected sparse coding is desired, this object has shape
-      (k, n, b) where k is the total number of batches, n is the (flattened)
+      (k, b, n) where k is the total number of batches, n is the (flattened)
       size of each image, and b is the size of an individual batch. If
       convolutional sparse coding is desired, then this object has shape
       (k, b, c, h, w), where k and b are again the total number of batches and
@@ -33,7 +33,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
   init_dictionary : torch.Tensor
       This is an initial guess for the dictionary of basis functions that
       we can use to descibe the images. In the fully-connected case, this is
-      torch.Tensor(float32, size=(n, s)) where n is the size of each image and
+      torch.Tensor(float32, size=(s, n)) where n is the size of each image and
       s is the size of the code. In the convolutional case, we have
       torch.Tensor(float32, size=(s, c, kh, kw)) where s is the size of the
       code (the number of channels in the resultant code). c is the number
@@ -100,54 +100,41 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     batch_images_np = batch_images.cpu().numpy()
     batch_sig_mag = np.max(batch_images_np) - np.min(batch_images_np)
     #^ psnr depends on the range of the data which we just estimate from
-    #  this batch.
+    #  this batch. # TODO: calculate this at the beginning if images is not
+    #  a DataLoader object
     if coding_mode == 'fully-connected':
-      recons = torch.mm(dictionary, codes).cpu().numpy()
-      lasso_l1_component = np.mean(
-          sparsity_weight * torch.norm(codes, p=1, dim=0).cpu().numpy())
-      lasso_l2_component = np.mean(
-          0.5 * np.linalg.norm(recons - batch_images_np, ord=2, axis=0)**2)
-      lasso_full = lasso_l2_component + lasso_l1_component
-      avg_perc_nonzero = torch.mean(
-          torch.norm(codes, p=0, dim=0) / codes.shape[0]).cpu().numpy()
-      recon_psnr = []
-      for b_idx in range(recons.shape[1]):
-        psnr = compute_pSNR(batch_images_np[:, b_idx],
-                            recons[:, b_idx], manual_sig_mag=batch_sig_mag)
-        if psnr != np.inf:
-          recon_psnr.append(psnr)
+      recons = torch.mm(codes, dictionary).cpu().numpy()
+      axes_of_summation = 1
     else:
-      recons_w_padding = torch.nn.functional.conv_transpose2d(
+      recons = torch.nn.functional.conv_transpose2d(
           codes, dictionary, stride=kernel_strides).cpu().numpy()
-      if image_padding is None:
-        recons_wo_padding = recons_w_padding
-        batch_images_np_wo_padding = batch_images_np
-      else:
-        recons_wo_padding = recons_w_padding[:, :,
+      # get rid of the padding
+      if image_padding is not None:
+        recons = recons[:, :,
             image_padding[0][0]:-image_padding[0][1],
             image_padding[1][0]:-image_padding[1][1]]
-        batch_images_np_wo_padding = batch_images_np[:, :,
+        batch_images_np = batch_images_np[:, :,
             image_padding[0][0]:-image_padding[0][1],
             image_padding[1][0]:-image_padding[1][1]]
-      lasso_l1_component = np.mean(
-          sparsity_weight * torch.norm(codes, p=1, dim=(1, 2, 3)).cpu().numpy())
-      lasso_l2_component = np.mean(
-          0.5 * np.sum(np.square(
-            recons_wo_padding - batch_images_np_wo_padding), axis=(1, 2, 3)))
-      # for some stupid reason numpy.linalg.norm doesn't work on 4d tensors
-      lasso_full = lasso_l2_component + lasso_l1_component
-      avg_perc_nonzero = torch.mean(
-          torch.norm(codes, p=0, dim=(1, 2, 3)) / np.prod(codes.shape[1:]))
-      recon_psnr = []
-      for b_idx in range(recons_wo_padding.shape[0]):
-        psnr = compute_pSNR(batch_images_np_wo_padding[b_idx],
-                            recons_wo_padding[b_idx],
-                            manual_sig_mag=batch_sig_mag)
-        if psnr != np.inf:
-          recon_psnr.append(psnr)
+      axes_of_summation = (1, 2, 3)
+    lasso_l1_component = np.mean(sparsity_weight *
+        torch.norm(codes, p=1, dim=axes_of_summation).cpu().numpy())
+    lasso_l2_component = np.mean(0.5 *
+        np.sum(np.square(recons - batch_images_np), axis=axes_of_summation))
+        # for some stupid reason numpy.linalg.norm doesn't work on 4d tensors
+    lasso_full = lasso_l2_component + lasso_l1_component
+    avg_perc_nonzero = torch.mean(
+        torch.norm(codes, p=0, dim=axes_of_summation) /
+        np.prod(codes.shape[1:]))
+    recon_psnr = []
+    for b_idx in range(recons.shape[0]):
+      psnr = compute_pSNR(batch_images_np[b_idx],
+                          recons[b_idx], manual_sig_mag=batch_sig_mag)
+      if psnr != np.inf:
+        recon_psnr.append(psnr)
     avg_recon_psnr = np.mean(recon_psnr)
     # Tensorboard doesn't give you a lot of control for how images look so
-    # i'm going to generate my own pyplot figures and save these as images.
+    # I'm going to generate my own pyplot figures and save these as images.
     # There's probably a more elegant way to do this, but it works for now...
     tiled_kernel_figs = display_dictionary(
         dictionary.cpu().numpy(), reshaping=kernel_reshaping,
@@ -289,19 +276,14 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     if coding_mode == 'fully-connected':
       from dict_update_rules.fully_connected import (
           sc_cheap_quadratic_descent as dict_update)
-      hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[1])
     else:
       from dict_update_rules.convolutional import (
           sc_cheap_quadratic_descent as dict_update)
-      hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
+    hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
   else:
     raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
 
-  if coding_mode == 'fully-connected':
-    batch_size = image_dataset[0].shape[1]
-    image_flatsize = image_dataset[0].shape[0]
-  else:
-    batch_size = image_dataset[0].shape[0]
+  batch_size = image_dataset[0].shape[0]
   num_batches = len(image_dataset)
   ##################################
   # Done w/ setup and error checking
@@ -373,7 +355,7 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
       elif dict_update_alg == 'sc_cheap_quadratic_descent':
         if coding_mode == 'fully-connected':
           hessian_diag = (hessian_diag.mul_(0.99) +
-                          torch.pow(codes, 2).mean(1)/100)  # credit Yubei Chen
+                          torch.pow(codes, 2).mean(0)/100)  # credit Yubei Chen
           dict_update.run(batch_images, dictionary, codes, hessian_diag,
                           stepsize=d_upd_stp, num_iters=d_upd_niters)
         else:
@@ -390,16 +372,9 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
     # we need to reshuffle the batches if we're not using a DataLoader
     if type(image_dataset) == torch.Tensor:
-      if coding_mode == 'fully-connected':
-        # because of PyTorch's assumption of row-first reshaping this is a
-        # little uglier than I would like...
-        image_dataset = image_dataset.permute(0, 2, 1).reshape(-1,
-            image_flatsize)[torch.randperm(num_batches * batch_size)].reshape(
-                -1, batch_size, image_flatsize).permute(0, 2, 1)
-      else:
-        image_dataset = image_dataset.reshape(
-            (-1,) + tuple(image_dataset.shape[2:]))[torch.randperm(
-              num_batches * batch_size)].reshape(image_dataset.shape)
+      image_dataset = image_dataset.reshape(
+          (-1,) + tuple(image_dataset.shape[2:]))[torch.randperm(
+            num_batches * batch_size)].reshape(image_dataset.shape)
 
     print("Epoch", epoch_idx, "finished")
     # let's make sure we release any unreferenced tensor to make their memory

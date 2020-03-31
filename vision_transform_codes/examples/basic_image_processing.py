@@ -60,20 +60,19 @@ def main():
   # we have to estimate the ZCA_transform on a large batch of data, and we do
   # it for 8x8 patches. Rather than whitening whole images, we just whiten
   # patches and then we can go back and reassemble the image.
+  print('Computing ZCA transform...')
   print('Creating a dataset of patches')
   one_mil_image_patches = dset_generation.create_patch_training_set(
       ['patch'], (8, 8),
       1000000, 1, edge_buffer=5, dataset=WHICH_DEMO_IMAGES,
       datasetparams={'filepath': raw_data_filepath,
                      'exclude': []})['batched_patches'][0]
-  print('Estimating the ZCA transform parameters based on this data')
   _, ZCA_params = im_proc.whiten_ZCA(one_mil_image_patches)
-
   print('Applying transform to test image')
   orig_img = unprocessed_images[4]  # arbitrary
   orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
   orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
-      orig_img, (8, 8))
+      orig_img, (8, 8), flatten_patches=True)
   white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
   white_img = im_proc.assemble_image_from_patches(
       white_patches, (8, 8), orig_img_patch_pos)
@@ -513,11 +512,10 @@ def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
   ax.set_xticklabels(['-0.5', '0.0', '0.5'])
 
   ax = fig.add_subplot(gridspec[1, 2])
-  p_basis_img, p_basis_im_range = plot_utils.get_dictionary_tile_imgs(
-      ZCA['PCA_basis'], (8, 8), renormalize=False)
+  p_basis_img = plot_utils.get_dictionary_tile_imgs(
+      ZCA['PCA_basis'].T, reshape_to_these_dims=(8, 8), renormalize=False)
   plt.title('PCA basis used', fontsize=12)
-  plt.imshow(p_basis_img[0], cmap='Greys_r', vmin=p_basis_im_range[0][0],
-             vmax=p_basis_im_range[0][1])
+  plt.imshow(np.squeeze(p_basis_img[0]), cmap='Greys_r')
   plt.axis('off')
 
   ax = fig.add_subplot(gridspec[1, 3])

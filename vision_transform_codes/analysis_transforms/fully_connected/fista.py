@@ -21,11 +21,11 @@ def run(images, dictionary, sparsity_weight, num_iters,
 
   Parameters
   ----------
-  images : torch.Tensor(float32, size=(n, b))
+  images : torch.Tensor(float32, size=(b, n))
       An array of images (probably just small patches) that we want to find the
       sparse code for. n is the size of each image and b is the number of
       images in this batch
-  dictionary : torch.Tensor(float32, size=(n, s))
+  dictionary : torch.Tensor(float32, size=(s, n))
       This is the dictionary of basis functions that we can use to descibe the
       images. n is the size of each image and s in the size of the code.
   sparsity_weight : torch.Tensor(float32)
@@ -33,7 +33,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
       function. It is often denoted as \lambda
   num_iters : int
       Number of steps of ISTA to run.
-  initial_codes : torch.Tensor(float32, size=(s, b)), optional
+  initial_codes : torch.Tensor(float32, size=(b, s)), optional
       Start with these initial values when computing the codes. Default None.
   early_stopping_epsilon : float, optional
       Terminate if code changes by less than this amount per component,
@@ -47,7 +47,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
 
   Returns
   -------
-  codes : torch.Tensor(float32, size=(s, b))
+  codes : torch.Tensor(float32, size=(b, s))
       The set of codes for this set of images. s is the code size and b in the
       batch size.
   """
@@ -60,16 +60,16 @@ def run(images, dictionary, sparsity_weight, num_iters,
   # find the stepsize, but in my experience this does not work well.
   try:
     lipschitz_constant = torch.symeig(
-        torch.mm(dictionary, dictionary.t()))[0][-1]
+        torch.mm(dictionary.t(), dictionary))[0][-1]
   except RuntimeError:
     print('symeig threw an exception. Likely due to one of the dictionary',
           'elements overflowing. The norm of each dictionary element is')
-    print(torch.norm(dictionary, dim=0, p=2))
+    print(torch.norm(dictionary, dim=1, p=2))
     raise RuntimeError()
   stepsize = 1. / lipschitz_constant
 
   if initial_codes is None:
-    codes = images.new_zeros(dictionary.size(1), images.size(1))
+    codes = images.new_zeros(images.size(0), dictionary.size(0))
   else:
     codes = initial_codes  # warm restart, we'll begin with these values
   aux_points = torch.zeros_like(codes).copy_(codes)
@@ -86,9 +86,9 @@ def run(images, dictionary, sparsity_weight, num_iters,
 
     t_k = t_kplusone
     ###### Proximal step using aux pts #######
-    # grad of l2 term w/ aux is <dictionary^T, (<dictionary, aux> - images)>
+    # grad of l2 term w/ aux is <(<aux, dictionary> - images), dictionary.T>
     codes = aux_points - stepsize * torch.mm(
-        dictionary.t(), torch.mm(dictionary, aux_points) - images)
+        torch.mm(aux_points, dictionary) - images, dictionary.t())
     if nonnegative_only:
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       #^ shifted rectified linear activation
