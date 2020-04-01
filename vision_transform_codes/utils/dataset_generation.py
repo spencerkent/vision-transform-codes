@@ -7,57 +7,54 @@ import scipy.io
 import h5py
 
 from utils import image_processing as ip_util
+from utils import defaults
 
-def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
-    batch_size, num_batches, edge_buffer, dataset, datasetparams,
-    flatten_patches=True):
+def create_patch_training_set(
+    num_batches, batch_size, patch_dimensions, edge_buffer, dataset,
+    order_of_preproc_ops, extra_params={}):
   """
-  Creates a dataset of image patches. Can be 'flattened' or not.
+  Creates a dataset of image patches.
 
-  Flattened images are used to train the 'fully-connected' transform codes,
-  while unflattened patches (which have a height, width, and channel dimension)
-  are used to train convolutional transform codes.
+  Patches can be 'flattened' or not. Flattened patches are used to train
+  'fully-connected' transform codes, while unflattened patches (which have a
+  height, width, and channel dimension) are used to train convolutional
+  transform codes.
 
   Parameters
   ----------
-  order_of_preproc_ops : list(str)
-      Specifies the preprocessing operations to perform on the data. Currently
-      available operations are
-      ----
-      {'whiten_center_surround', 'whiten_ZCA', 'patch', 'pad',
-       'center_each_component', 'center_each_patch',
-       'normalize_component_variance', 'divide_by_constant',
-       'shift_by_constant', 'local_contrast_nomalization'}.
-      ----
-      Example: (we want to perform Bruno's whitening in the fourier domain and
-                also have the components of each patch have zero mean)
-          ['whiten_center_surround', 'patch', 'center_each_component']
-  patch_dimensions : tuple(int, int)
-      The size in pixels of each patch
-  batch_size : int
-      The number of patches in a batch
   num_batches : int
       The total number of batches to assemble
+  batch_size : int
+      The number of patches in a batch
+  patch_dimensions : tuple(int, int)
+      The size in pixels of each patch
   edge_buffer : int
       The buffer from the edge of the image from which we will not include any
       patches.
   dataset : str
       The name of the dataset to grab patches from. Currently one of
       {'Field_NW', 'vanHateren', 'Kodak_BW'}.
-  datasetparams : dictionary
-      A dictionary of parameters that may be specific to the dataset. Currently
-      just specifies the filepath of the data file and which images to
-      exclude from the training set.
-      'filepath' : str
-      'exclude' : list(int)
-      'div_constant': float (only checked if divide_by_constant preproc op)
-      'shift_constant': float (only checked if shift_by_constant preproc op)
-      'padding': tuple(tuple) (only checked in pad preproc op)
-  flatten_patches : bool, optional
-      Flatten each patch into a vector, using the default behavior of Numpy's
-      .reshape() method. Used for training 'fully-connected' transform codes.
-      If False, we leave patches with height, width, and channel dimensions.
-      Default True.
+  order_of_preproc_ops : list(str)
+      Specifies the preprocessing operations to perform on the data. Currently
+      available operations are
+      ----
+      {'standardize_data_range', 'whiten_center_surround', 'whiten_ZCA',
+       'patch', 'pad', 'center_each_component', 'center_each_patch',
+       'normalize_component_variance', 'local_contrast_nomalization'}.
+  extra_params : dictionary, optional
+      A dictionary of extra parameters, usually specific to the dataset or the
+      preprocessing operations. Can, for instance, specify a filepath for the
+      raw images (to be used instead of the default), certain images to
+      exclude, or some padding to add to the patches.
+        'filepath' : str, optional
+        'exclude' : list(int), optional
+        'padding': tuple(tuple), optional (only checked in pad preproc op)
+        'lcn_kernel_sz' : tuple(int, int), optional
+        'flatten_patches' : bool, optional
+          Flatten each patch into a vector, using the default behavior of
+          NumPy's .reshape() method. Used for training 'fully-connected'
+          transform codes. If False, we leave patches with height, width, and
+          channel dimensions. Default True.
 
   Returns
   -------
@@ -78,54 +75,96 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
         If 'normalize_component_variance' was requested as a preprocessing step
         we return the original variances so that future data can be processed
         using this same exact normalization
+    'original_data_range' : tuple(float, float), optional
+        #TODO add docstring
     'ZCA_parameters : dictionary, optional
         See whiten_ZCA() above.
   """
   assert 'patch' in order_of_preproc_ops
-  # our convention is that the first axis indexes images
+  if 'pad' in order_of_preproc_ops:
+    assert 'padding' in extra_params
+  if 'local_contrast_nomalization' in order_of_preproc_ops:
+    assert 'lcn_kernel_sz' in extra_params
+  if 'standardize_data_range' in order_of_preproc_ops:
+    idx_sdr = [x for x in range(len(order_of_preproc_ops))
+               if order_of_preproc_ops[x] == 'standardize_data_range']
+    assert len(idx_sdr) == 1 and idx_sdr[0] == 0
+  if 'filepath' in extra_params:
+    filepath = extra_params['filepath']
+  else:
+    filepath = defaults.raw_data_filepaths[dataset]
+  if 'flatten_patches' in extra_params:
+    flatten_patches = extra_params['flatten_patches']
+  else:
+    flatten_patches = True  # default behavior is to flatten
+
+  # pre_patch_imgs is the main datastructure. List so that (pre-patch) images
+  # can have different dimensions. Always casted to float32.
   if dataset == 'Field_NW':
     unprocessed_images = scipy.io.loadmat(
-      datasetparams['filepath'])['IMAGESr'].astype('float32')
+        filepath)['IMAGESr'].astype('float32')
+    # ^have kind of a weird range, they're in between ~-3.19 and ~6.4, but
+    #  not every image maxes out the range. Unclear what Bruno did to produce
+    #  these images...
     temp = np.transpose(unprocessed_images, (2, 0, 1))
-    unprocessed_images = [temp[x][:, :, None] for x in range(temp.shape[0])]
+    pre_patch_imgs = [temp[x][:, :, None] for x in range(temp.shape[0])]
   elif dataset == 'vanHateren':
     # this dataset is MUCH larger so it will take some time to load into memory
-    with h5py.File(datasetparams['filepath']) as file_handle:
+    print('Im just trying to load data...')
+    with h5py.File(filepath) as file_handle:
       temp = np.array(file_handle['van_hateren_good'], dtype='float32')
-    unprocessed_images = [temp[x][:, :, None] for x in range(temp.shape[0])]
-    #^ maximum pixel value is 1.0, but minimum value is NOT 0.0, more like 0.4
+    # ^maximum pixel value is 1.0, but minimum value is NOT 0.0, more like 0.4
+    #  some notes on this dataset here: http://bethgelab.org/datasets/vanhateren/
+    #  but note that these were curated and further processed by Dylan Paiton.
+    pre_patch_imgs = [temp[x][:, :, None] for x in range(temp.shape[0])]
   elif dataset == 'Kodak_BW':
-    unprocessed_images = pickle.load(open(datasetparams['filepath'], 'rb'))
-    # this is a list of images, so that each image can be EITHER
-    # 752x496 or 496x752, whichever makes it upright
-    unprocessed_images = [x.astype('float32')[:, :, None]
-                          for x in unprocessed_images]
-    #^ these should be float32 for further processing...
+    unprocessed_images = pickle.load(open(filepath, 'rb'))
+    # ^These are [0, 255] uint8's, thankfully. Weirdly though, each image maxes
+    #  out this range so it's as if they've all been renormalized. This is one
+    #  way that this dataset is not 'natural'.
+    pre_patch_imgs = [x.astype('float32')[:, :, None]
+                      for x in unprocessed_images]
   elif dataset == 'Kodak':
     raise NotImplementedError('This is next')
   else:
     raise KeyError('Unrecognized dataset ' + dataset)
-  eligible_image_inds = np.array([x for x in range(len(unprocessed_images))
-                                  if x not in datasetparams['exclude']])
 
-  p_imgs = [unprocessed_images[x] for x in eligible_image_inds]
-  num_color_channels = p_imgs[0].shape[2]
+  if 'exclude' in extra_params:
+    pre_patch_imgs = [pre_patch_imgs[x] for x in range(len(pre_patch_imgs))
+                      if x not in extra_params['exclude']]
+
+  num_color_channels = pre_patch_imgs[0].shape[2]
   already_patched_flag = False
   for preproc_op in order_of_preproc_ops:
 
-    if preproc_op == 'patch':
+    if preproc_op == 'standardize_data_range':
+      # what we mean by standardize is simply to take the maximum value across
+      # the entire dataset and make this 1.0, and to take the minimum value
+      # and make it zero. This will leave individual images with the same
+      # relative luminances and constrasts, but just put the data in a
+      # standard range.
+      min_val = np.min([np.min(pre_patch_imgs[x])
+                        for x in range(len(pre_patch_imgs))])
+      max_val = np.max([np.max(pre_patch_imgs[x])
+                        for x in range(len(pre_patch_imgs))])
+      assert max_val > min_val
+      for img_idx in range(len(pre_patch_imgs)):
+        pre_patch_imgs[img_idx] = ((pre_patch_imgs[img_idx] - min_val) /
+                                   (max_val - min_val))
+
+    elif preproc_op == 'patch':
       max_vert_pos = []
       min_vert_pos = []
       max_horz_pos = []
       min_horz_pos = []
-      for img_idx in range(len(p_imgs)):
-        max_vert_pos.append(
-            p_imgs[img_idx].shape[0] - patch_dimensions[0] - edge_buffer)
+      for img_idx in range(len(pre_patch_imgs)):
+        max_vert_pos.append(pre_patch_imgs[img_idx].shape[0] -
+            patch_dimensions[0] - edge_buffer)
         min_vert_pos.append(edge_buffer)
-        max_horz_pos.append(
-            p_imgs[img_idx].shape[1] - patch_dimensions[1] - edge_buffer)
+        max_horz_pos.append(pre_patch_imgs[img_idx].shape[1] -
+            patch_dimensions[1] - edge_buffer)
         min_horz_pos.append(edge_buffer)
-      num_imgs = len(p_imgs)
+      num_imgs = len(pre_patch_imgs)
 
       all_patches = np.zeros(
         [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
@@ -139,7 +178,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
                                        high=max_vert_pos[img_idx])
           horz_pos = np.random.randint(low=min_horz_pos[img_idx],
                                        high=max_horz_pos[img_idx])
-          all_patches[p_idx] = p_imgs[img_idx][
+          all_patches[p_idx] = pre_patch_imgs[img_idx][
             vert_pos:vert_pos+patch_dimensions[0],
             horz_pos:horz_pos+patch_dimensions[1]]
           p_idx += 1
@@ -152,8 +191,9 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       if already_patched_flag:
         raise KeyError('We typically preform this type of whitening before ' +
                        'patching the images')
-      for img_idx in range(len(p_imgs)):
-        p_imgs[img_idx] = ip_util.whiten_center_surround(p_imgs[img_idx])
+      for img_idx in range(len(pre_patch_imgs)):
+        pre_patch_imgs[img_idx] = ip_util.whiten_center_surround(
+            pre_patch_imgs[img_idx])
 
     elif preproc_op == 'whiten_ZCA':
       if not already_patched_flag:
@@ -167,24 +207,9 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       if already_patched_flag:
         raise KeyError('We typically preform this before ' +
                        'patching the images')
-      for img_idx in range(len(p_imgs)):
-        p_imgs[img_idx] = ip_util.local_contrast_nomalization(
-            p_imgs[img_idx], kernel_size=datasetparams['lcn_kernel_sz'])
-
-    elif preproc_op == 'divide_by_constant':
-      if already_patched_flag:
-        all_patches = all_patches / datasetparams['div_constant']
-      else:
-        # likely use case is to do this before whitening and patching
-        for img_idx in range(len(p_imgs)):
-          p_imgs[img_idx] = p_imgs[img_idx] / datasetparams['div_constant']
-
-    elif preproc_op == 'shift_by_constant':
-      if already_patched_flag:
-        all_patches = all_patches + datasetparams['shift_constant']
-      else:
-        for img_idx in range(len(p_imgs)):
-          p_imgs[img_idx] = p_imgs[img_idx] + datasetparams['shift_constant']
+      for img_idx in range(len(pre_patch_imgs)):
+        pre_patch_imgs[img_idx] = ip_util.local_contrast_nomalization(
+            pre_patch_imgs[img_idx], kernel_size=extra_params['lcn_kernel_sz'])
 
     elif preproc_op == 'center_each_component':
       if not already_patched_flag:
@@ -216,7 +241,7 @@ def create_patch_training_set(order_of_preproc_ops, patch_dimensions,
       if flatten_patches:
         raise KeyError('Flattened patches shouldnt require padding')
       all_patches = np.pad(all_patches,
-          ((0, 0),) + datasetparams['padding'] + ((0, 0),), mode='constant',
+          ((0, 0),) + extra_params['padding'] + ((0, 0),), mode='constant',
           constant_values=0.)
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)

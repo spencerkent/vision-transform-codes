@@ -174,7 +174,8 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     plt.close(plt_fig)
     the_tensor = torch.tensor(np.array(Image.open(buf))[:, :, :3])
     tb_summary_writer.add_image(img_caption,
-        torch.tensor(np.array(Image.open(buf))[:, :, :3]), dataformats='HWC')
+        torch.tensor(np.array(Image.open(buf))[:, :, :3]),
+        global_step=total_iter_idx, dataformats='HWC')
   ##########################
   # Done w/ helper functions
   ##########################

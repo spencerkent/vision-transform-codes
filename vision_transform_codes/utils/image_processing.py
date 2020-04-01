@@ -320,7 +320,7 @@ def local_contrast_nomalization(image, kernel_size, return_normalizer=False):
   Returns
   -------
   filtered_image : ndarray(float32, size=(h, w, c))
-  normalizer : ndarray(float32, size=(h, w, c))
+  normalizer : ndarray(float32, size=(h, w, c)), if return_normalizer=True
   """
   v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
                        int(np.ceil(kernel_size[0]/2)))
