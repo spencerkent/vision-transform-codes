@@ -184,7 +184,6 @@ def create_patch_training_set(
           p_idx += 1
         if batch_idx % 1000 == 0 and batch_idx != 0:
           print('Finished creating', batch_idx, 'batches')
-      print('Done.')
       already_patched_flag = True
 
     elif preproc_op == 'whiten_center_surround':
