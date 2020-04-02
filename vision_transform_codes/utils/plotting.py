@@ -41,8 +41,8 @@ def compute_ssim(target, reconstruction, manual_sig_mag=None):
               gaussian_weights=True, sigma=1.5, use_sample_covariance=False)
 
 
-def display_dictionary(dictionary, reshaping=None,
-                       plot_title="", renormalize=False):
+def display_dictionary(dictionary, renormalize=False,
+                       reshaping=None, plot_title=""):
   """
   Plot each of the dictionary elements side by side
 
@@ -54,19 +54,19 @@ def display_dictionary(dictionary, reshaping=None,
       image it is trying to represent. n is the size of the image and s the
       number of basis functions. If the size of dictionary is (s, c, kh, kw),
       this is a 'convolutional' dictionary where each basis element is
-      (potentially much smaller) that the image it is trying to represent. c
+      (potentially much smaller) than the image it is trying to represent. c
       is the number of channels that in the input space, kh is the dictionary
       kernel height, and kw is the dictionary kernel width.
       A dictionary, the matrix used in the linear synthesis transform
+  renormalize : bool, optional
+      If present, renormalize each basis function to the interval [-1, 1]
+      before displaying. Otherwise they are displayed on their original scale.
+      Default False.
   reshaping : tuple(int, int) if fully-connected, otherwise None
       If not None, this is the dimension of each patch before vectorization
       to size n. We reshape the dictionary elements based on this.
   plot_title : str, optional
       The title of the plot. Default ""
-  renormalize : bool, optional
-      If present, renormalize each basis function to the interval [0, 1] before
-      displaying. Otherwise they are displayed on their original scale.
-      Default True.
 
   Returns
   -------
@@ -74,41 +74,49 @@ def display_dictionary(dictionary, reshaping=None,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  t_ims = get_dictionary_tile_imgs(dictionary,
-      reshape_to_these_dims=reshaping, renormalize=renormalize)
+  t_ims, dscale = get_dictionary_tile_imgs(dictionary,
+      reshape_to_these_dims=reshaping, indv_renorm=renormalize)
   fig_refs = []
   for fig_idx in range(len(t_ims)):
     fig = plt.figure(figsize=(15, 15))
-    fig.suptitle(plot_title + ', fig {} of {}'.format(
-                 fig_idx+1, len(t_ims)), fontsize=15)
+    plt.title(plot_title + ', fig {} of {}'.format(
+                 fig_idx+1, len(t_ims)), fontsize=20)
     display_gray = True if t_ims[fig_idx].shape[-1] == 1 else False
     if display_gray:
       im_ref = plt.imshow(np.squeeze(t_ims[fig_idx]), cmap='Greys_r',
-                          interpolation='None')
+                          vmin=dscale[0], vmax=dscale[1], interpolation='None')
     else:
-      im_ref = plt.imshow(t_ims[fig_idx], interpolation='None')
+      im_ref = plt.imshow(t_ims[fig_idx], interpolation='None',
+                          vmin=dscale[0], vmax=dscale[1])
+      #TODO: make sure this is right for RGB
     if not renormalize:
       cbar_ref = plt.colorbar(im_ref, shrink=0.25)
-    # Otherwise it is expected that white is 1.0, Black is 0.0
+    # Otherwise it is expected that white is 1.0, Black is -1.0
     plt.axis('off')
-    plt.tight_layout()
+    plt.tight_layout(pad=4)
     fig_refs.append(fig)
 
   return fig_refs
 
 
-def get_dictionary_tile_imgs(dictionary, renormalize=False,
+def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
                              reshape_to_these_dims=None):
   """
   Arranges a dictionary into a series of imgs that tile elements side by side
+
+  We do some simple rescaling to provide a standard interpretation of white and
+  black pixels in the image (and everything in-between).
 
   Parameters
   ----------
   dictionary : ndarray(float32, size=(s, n) OR (s, c, kh, kw))
       See docstring of display_dictionary below.
-  renormalize : bool
-      If true, renormalize the pixel values for each basis function to the
-      interval [0, 1]. Otherwise they are left on their original scale.
+  indv_renorm : bool, optional
+      If true, renormalize the pixel values for each individual basis function
+      to the interval [-1, 1], making 0 the mean value of the patch. This makes
+      it easier to see what's going on in patches that have low contrast
+      compared to the others. It removes the ability to compare patches, but it
+      allows on to better examine structure within a patch. Default False.
   reshape_to_these_dims : tuple(int, int) if fully-connected, otherwise None
       If not None, this is the dimension of each patch before vectorization
       to size n. We reshape the dictionary elements based on this.
@@ -117,7 +125,39 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
   -------
   tile_imgs : list(ndarray)
       Each element is an image to be displayed by imshow
+  display_range : tuple(float, float)
+      Pass this to imshow to be sure that values are displayed
+      on the correct scale.
   """
+  def determine_display_range(raw_dict):
+    max_de_val = np.max(raw_dict)
+    min_de_val = np.min(raw_dict)
+    skew_toward_max = np.argmax([abs(min_de_val), abs(max_de_val)])
+    if max_de_val == min_de_val:  # constant value
+      if min_de_val == 0:
+        display_range = [-1, 1]
+      elif min_de_val >= 0:
+        display_range = [0, 2 * max_de_val]
+      else:
+        display_range = [2 * min_de_val, 0]
+    else:
+      if min_de_val >= 0:
+        display_range = [0, max_de_val]
+      elif max_de_val <= 0:
+        display_range = [min_de_val, 0]
+      else:
+        # probably the most common case
+        if skew_toward_max:
+          display_range = [-max_de_val, max_de_val]
+        else:
+          display_range = [min_de_val, -min_de_val]
+    return display_range
+
+  if indv_renorm:
+    display_range = [-1, 1]
+  else:
+    display_range = determine_display_range(dictionary)
+
   max_de_per_img = 80*80  # max 80x80 {d}ictionary {e}lements per tile img
   assert np.sqrt(max_de_per_img) % 1 == 0, 'please pick a square number'
   num_de = dictionary.shape[0]
@@ -131,9 +171,6 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
     de_per_img = squares[bisect.bisect_left(squares, num_de)]
   plot_sidelength = int(np.sqrt(de_per_img))
 
-  max_de_val = np.max(dictionary)
-  min_de_val = np.min(dictionary)
-
   if dictionary.ndim == 2:
     assert reshape_to_these_dims is not None
     basis_elem_size = reshape_to_these_dims
@@ -141,25 +178,18 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
       basis_elem_size = basis_elem_size + (1,)
   else:
     basis_elem_size = np.array(dictionary.shape[1:])[[1, 2, 0]]
+
   h_margin = 2
   w_margin = 2
   full_img_height = (basis_elem_size[0] * plot_sidelength +
                      (plot_sidelength - 1) * h_margin)
   full_img_width = (basis_elem_size[1] * plot_sidelength +
                     (plot_sidelength - 1) * w_margin)
-
   de_idx = 0
   tile_imgs = []
   for in_de_img_idx in range(num_tile_imgs):
-
     image_matrix_shape = (full_img_height, full_img_width, basis_elem_size[2])
-
-    if renormalize:
-      composite_img = np.ones(image_matrix_shape)
-    else:
-      composite_img = max_de_val * np.ones(image_matrix_shape)
-    # ^TODO: not yet sure if renormalization works properly with color images.
-
+    composite_img = display_range[1] * np.ones(image_matrix_shape)
     img_de_idx = de_idx % de_per_img
     while img_de_idx < de_per_img and de_idx < num_de:
 
@@ -168,9 +198,10 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
         this_de = this_de.reshape(basis_elem_size)
       else:
         this_de = np.moveaxis(dictionary[de_idx], 0, 2)
-      if renormalize:
-        this_de = this_de - np.min(this_de)
-        this_de = this_de / np.max(this_de)  # now in [0, 1]
+
+      if indv_renorm:
+        this_de = this_de - np.mean(this_de)  # mean-zero
+        this_de = this_de / np.max(np.abs(this_de))  # most extr. val -1 or +1
 
       # okay, now actually plot the DEs in this tile image
       row_idx = img_de_idx // plot_sidelength
@@ -186,7 +217,7 @@ def get_dictionary_tile_imgs(dictionary, renormalize=False,
 
     tile_imgs.append(composite_img)
 
-  return tile_imgs
+  return tile_imgs, display_range
 
 
 def display_codes(codes, plot_title=""):
@@ -227,7 +258,7 @@ def display_codes(codes, plot_title=""):
       if dpt_idx % 25 == 0:
         print('plotted', dpt_idx, 'of', num_codes, 'codes')
       _, linerefs, _ = ax[fig_dpt_idx].stem(np.arange(code_size),
-          codes[dpt_idx, :], linefmt='-', markerfmt=' ', 
+          codes[dpt_idx, :], linefmt='-', markerfmt=' ',
           use_line_collection=True)
       plt.setp(linerefs, 'color', tab10colors[0])
       ax[fig_dpt_idx].text(0.1, 0.5, 'L0: {:.2f}, L1: {:.1f}'.format(

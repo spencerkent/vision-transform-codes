@@ -513,7 +513,7 @@ def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
 
   ax = fig.add_subplot(gridspec[1, 2])
   p_basis_img = plot_utils.get_dictionary_tile_imgs(
-      ZCA['PCA_basis'].T, reshape_to_these_dims=(8, 8), renormalize=False)
+      ZCA['PCA_basis'].T, reshape_to_these_dims=(8, 8))
   plt.title('PCA basis used', fontsize=12)
   plt.imshow(np.squeeze(p_basis_img[0]), cmap='Greys_r')
   plt.axis('off')
