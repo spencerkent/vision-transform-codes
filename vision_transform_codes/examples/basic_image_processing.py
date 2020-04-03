@@ -33,8 +33,8 @@ def main():
   dft_num_samples = orig_img.shape[:2]
   lpf = im_proc.get_low_pass_filter(
       dft_num_samples, {'shape': 'exponential', 'cutoff': 0.1, 'order': 4.0})
-  lpf_img = im_proc.filter_image(orig_img, lpf)
-  orig_img_recovered = im_proc.filter_image(lpf_img, 1./lpf)
+  lpf_img = im_proc.filter_fd(orig_img, lpf)
+  orig_img_recovered = im_proc.filter_fd(lpf_img, 1./lpf)
   # A little visualization
   visualize_lp_filtering(np.squeeze(orig_img), np.squeeze(lpf_img), lpf,
                          np.squeeze(orig_img_recovered), dft_num_samples)
@@ -63,10 +63,9 @@ def main():
   print('Computing ZCA transform...')
   print('Creating a dataset of patches')
   one_mil_image_patches = dset_generation.create_patch_training_set(
-      ['patch'], (8, 8),
-      1000000, 1, edge_buffer=5, dataset=WHICH_DEMO_IMAGES,
-      datasetparams={'filepath': raw_data_filepath,
-                     'exclude': []})['batched_patches'][0]
+      num_batches=1, batch_size=1000000, patch_dimensions=(8, 8), 
+      edge_buffer=5, dataset='Kodak_BW', 
+      order_of_preproc_ops=['patch'])['batched_patches'][0]
   _, ZCA_params = im_proc.whiten_ZCA(one_mil_image_patches)
   print('Applying transform to test image')
   orig_img = unprocessed_images[4]  # arbitrary
@@ -89,7 +88,7 @@ def main():
   ##############################
   orig_img = unprocessed_images[4]  # arbitrary
   orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
-  normalized_img, normalizer = im_proc.local_contrast_nomalization(
+  normalized_img, normalizer = im_proc.local_contrast_normalization(
       orig_img, (17, 17), return_normalizer=True)
   orig_img_recovered = normalized_img * normalizer
   visualize_lcn(np.squeeze(orig_img), np.squeeze(normalized_img),

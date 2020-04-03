@@ -12,6 +12,7 @@ import numpy as np
 from scipy.signal import convolve2d
 from matplotlib import pyplot as plt
 
+
 def get_low_pass_filter(DFT_num_samples, filter_parameters):
   """
   Returns the DFT of a lowpass filter that can be applied to an image
@@ -95,9 +96,9 @@ def get_whitening_ramp_filter(DFT_num_samples):
   return wf_DFT_mag * np.exp(1j * wf_DFT_phase)
 
 
-def filter_image(image, filter_DFT):
+def filter_fd(image, filter_DFT):
   """
-  Just takes the DFT of a filter and applies the filter to an image
+  Filters an image using a filter specified in the {f}requency {d}omain
 
   This may optionally pad the image so as to match the number of samples in the
   filter DFT. We should make sure this is greater than or equal to the size of
@@ -127,6 +128,31 @@ def filter_image(image, filter_DFT):
   return filtered_image
 
 
+def filter_sd(image, filter_spatial):
+  """
+  Filters an image using a filter specified in the {s}patial {d}omain
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      The image to be filtered. The filter is applied to each color
+      channel independently.
+  filter_spatial : ndarray(float32 or uint8, size=(fh, fw))
+      The filter has fh samples in the vertical dimension and fw samples in
+      the horizontal dimension
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  """
+  assert image.dtype in ['float32', 'uint8']
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    filtered_image[:, :, color_channel] = convolve2d(
+        image[:, :, color_channel], filter_spatial, 'same')
+  return filtered_image
+
+
 def whiten_center_surround(image, return_filter=False):
   """
   Applies the scheme described in the Vision Research sparse coding paper [1]
@@ -150,9 +176,9 @@ def whiten_center_surround(image, return_filter=False):
   combined_filter /= np.max(np.abs(combined_filter))
   #^ make the maximum filter magnitude equal to 1
   if return_filter:
-    return filter_image(image, combined_filter), combined_filter
+    return filter_fd(image, combined_filter), combined_filter
   else:
-    return filter_image(image, combined_filter)
+    return filter_fd(image, combined_filter)
 
 
 def unwhiten_center_surround(image, orig_filter_DFT=None):
@@ -175,7 +201,7 @@ def unwhiten_center_surround(image, orig_filter_DFT=None):
     wf = get_whitening_ramp_filter(image.shape)
     orig_filter_DFT = wf * lpf
     orig_filter_DFT /= np.max(np.abs(orig_filter_DFT))
-  return filter_image(image, 1. / orig_filter_DFT)
+  return filter_fd(image, 1. / orig_filter_DFT)
 
 
 def whiten_ZCA(flat_data, precomputed_ZCA_parameters=None):
@@ -303,7 +329,7 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
   return colored_data
 
 
-def local_contrast_nomalization(image, kernel_size, return_normalizer=False):
+def local_contrast_normalization(image, kernel_size, return_normalizer=False):
   """
   Computes an estimate of the local contrast and removes this from an image
 
@@ -331,18 +357,12 @@ def local_contrast_nomalization(image, kernel_size, return_normalizer=False):
   gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
   gaussian_kernel /= np.sum(gaussian_kernel)
 
-  filtered_image = np.zeros(image.shape, dtype='float32')
-  local_variance = np.zeros(image.shape, dtype='float32')
-  for color_channel in range(image.shape[2]):
-    local_variance[:, :, color_channel] = convolve2d(
-        image[:, :, color_channel]**2, gaussian_kernel, 'same')
-    filtered_image[:, :, color_channel] = (image[:, :, color_channel] /
-        np.sqrt(local_variance[:, :, color_channel]))
+  local_variance = filter_sd(image**2, gaussian_kernel)
 
   if return_normalizer:
-    return filtered_image, np.sqrt(local_variance)
+    return image / np.sqrt(local_variance), np.sqrt(local_variance)
   else:
-    return filtered_image
+    return image / np.sqrt(local_variance)
 
 
 def local_luminance_subtraction(image, kernel_size, return_subtractor=False):

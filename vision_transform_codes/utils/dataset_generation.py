@@ -40,7 +40,7 @@ def create_patch_training_set(
       ----
       {'standardize_data_range', 'whiten_center_surround', 'whiten_ZCA',
        'patch', 'pad', 'center_each_component', 'center_each_patch',
-       'normalize_component_variance', 'local_contrast_nomalization'}.
+       'normalize_component_variance', 'local_contrast_normalization'}.
   extra_params : dictionary, optional
       A dictionary of extra parameters, usually specific to the dataset or the
       preprocessing operations. Can, for instance, specify a filepath for the
@@ -83,7 +83,7 @@ def create_patch_training_set(
   assert 'patch' in order_of_preproc_ops
   if 'pad' in order_of_preproc_ops:
     assert 'padding' in extra_params
-  if 'local_contrast_nomalization' in order_of_preproc_ops:
+  if 'local_contrast_normalization' in order_of_preproc_ops:
     assert 'lcn_kernel_sz' in extra_params
   if 'standardize_data_range' in order_of_preproc_ops:
     idx_sdr = [x for x in range(len(order_of_preproc_ops))
@@ -207,7 +207,7 @@ def create_patch_training_set(
         raise KeyError('We typically preform this before ' +
                        'patching the images')
       for img_idx in range(len(pre_patch_imgs)):
-        pre_patch_imgs[img_idx] = ip_util.local_contrast_nomalization(
+        pre_patch_imgs[img_idx] = ip_util.local_contrast_normalization(
             pre_patch_imgs[img_idx], kernel_size=extra_params['lcn_kernel_sz'])
 
     elif preproc_op == 'center_each_component':
