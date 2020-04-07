@@ -96,6 +96,84 @@ def get_whitening_ramp_filter(DFT_num_samples):
   return wf_DFT_mag * np.exp(1j * wf_DFT_phase)
 
 
+def get_gabor_filter(filter_size, filter_parameters):
+  """
+  Generate a spatial filter based on a Gabor function.
+
+  Here is my convention for parameterizing a Gabor, which may be slightly
+  different than what you've see online or elsewhere.
+  1) There are two orthogonal axes for a Gabor, the direction
+     (aligned/parallel) to the grating is the primary axis. It is also the axis
+     along which the envelope is larger. The direction normal to the grating
+     is the secondary axis.
+  2) Orientation is in *radians counter-clockwise from horizontal* of the
+     *primary* axis. At 0 radians, the filter is most sensitive to
+     horizontal lines. At pi/2 it is most sensitive to vertical lines.
+  3) The envelope width is the standard deviation \sigma of the guassian
+     envelope along the primary axis
+  4) The envelope aspect ratio is \sigma along the secondary axis divided by
+     \sigma along the primary axis. It should be less than 1.
+
+  Parameters
+  ----------
+  filter_size : (int, int)
+      The spatial size of the filter, in pixels
+  filter_parameters : dictionary
+      'orientation' : float
+        The orientation of the filter, in radians
+      'envelope_width' : float
+        The standard deviation of the gaussian envelope along the primary axis
+      'envelope_aspect' : float
+        The ratio of envelope size between the secondary and primary axes.
+      'frequency' : float
+        Frequency, in cycles / pixel.
+      'phase' : float
+        Phase offest in radians (sin() used for grating).
+      'position_yx' : (int, int)
+        The position, in pixels, of the Gabor, relative to the center of the
+        filter. This uses "array-indexing" rather than "Cartesian" indexing
+        (as does this entire library) so increasing y is *down*.
+
+  Returns
+  -------
+  gabor : ndarray(float32, size=(filter_size[0], filter_size[1]))
+      The Gabor function filter. Will have an l2-norm of 1.0
+
+  Example
+  -------
+  get_gabor_filter(filter_size=(16, 16), filter_parameters={
+    'orientation': np.pi/6, 'envelope_width'=4, 'envelope_aspect': 0.75,
+    'frequency': 1/8, 'phase'=0, 'position_yx'=(3, 2))
+  """
+  assert filter_size[0] > 2 and filter_size[1] > 2
+  assert (filter_parameters['envelope_width'] <= filter_size[0] and
+          filter_parameters['envelope_width'] <= filter_size[1])
+  assert filter_parameters['envelope_aspect'] <= 1.0
+  v_coords = np.arange(-int(np.floor(filter_size[0]/2)),
+                       int(np.ceil(filter_size[0]/2)))
+  h_coords = np.arange(-int(np.floor(filter_size[1]/2)),
+                       int(np.ceil(filter_size[1]/2)))
+  assert filter_parameters['position_yx'][0] >= np.min(v_coords)
+  assert filter_parameters['position_yx'][1] >= np.min(h_coords)
+
+  mv, mh = np.meshgrid(v_coords, h_coords, indexing='ij')
+  mv_trans, mh_trans = np.meshgrid(
+      filter_parameters['position_yx'][0] * np.ones(filter_size[0]),
+      filter_parameters['position_yx'][1] * np.ones(filter_size[1]),
+      indexing='ij')
+  mh_prime = ((mh-mh_trans) * np.cos(filter_parameters['orientation']) -
+              (mv-mv_trans) * np.sin(filter_parameters['orientation']))
+  mv_prime = ((mh-mh_trans) * np.sin(filter_parameters['orientation']) +
+              (mv-mv_trans) * np.cos(filter_parameters['orientation']))
+  envelope = np.exp(-1 * (
+    (mh_prime**2) + ((mv_prime / filter_parameters['envelope_aspect'])**2))
+    / (2*(filter_parameters['envelope_width']**2)))
+  grating = np.sin(2 * np.pi * filter_parameters['frequency'] * mv_prime +
+                   filter_parameters['phase'])
+  gabor = envelope * grating
+  return gabor / np.linalg.norm(gabor)
+
+
 def filter_fd(image, filter_DFT):
   """
   Filters an image using a filter specified in the {f}requency {d}omain
