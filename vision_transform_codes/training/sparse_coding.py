@@ -101,7 +101,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     inf_alg_inputs = {
         'dictionary': dictionary, 'sparsity_weight': sparsity_weight,
         'num_iters': inf_num_iters, 'nonnegative_only': nonneg_only}
-    if coding_mode == 'fully_connected':
+    if coding_mode == 'fully-connected':
       inf_alg_inputs.update({'images': batch_images})
     else:
       inf_alg_inputs.update({'images_prepadded': batch_images,
@@ -112,7 +112,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   def update_dictionary(batch_images, batch_codes):
     dict_upd_alg_inputs = {'dictionary': dictionary, 'codes': batch_codes,
       'stepsize': d_upd_stp, 'num_iters': d_upd_niters}
-    if coding_mode == 'fully_connected':
+    if coding_mode == 'fully-connected':
       dict_upd_alg_inputs.update({'images': batch_images})
     else:
       dict_upd_alg_inputs.update({'images_prepadded': batch_images,
