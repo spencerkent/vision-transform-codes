@@ -40,7 +40,8 @@ def create_patch_training_set(
       ----
       {'standardize_data_range', 'whiten_center_surround', 'whiten_ZCA',
        'patch', 'pad', 'center_each_component', 'center_each_patch',
-       'normalize_component_variance', 'local_contrast_normalization'}.
+       'normalize_component_variance', 'local_contrast_normalization',
+       'local_luminance_subtraction'}.
   extra_params : dictionary, optional
       A dictionary of extra parameters, usually specific to the dataset or the
       preprocessing operations. Can, for instance, specify a filepath for the
@@ -49,7 +50,7 @@ def create_patch_training_set(
         'filepath' : str, optional
         'exclude' : list(int), optional
         'padding': tuple(tuple), optional (only checked in pad preproc op)
-        'lcn_kernel_sz' : tuple(int, int), optional
+        'lcn_filter_sigma' : tuple(int, int), optional
         'flatten_patches' : bool, optional
           Flatten each patch into a vector, using the default behavior of
           NumPy's .reshape() method. Used for training 'fully-connected'
@@ -84,7 +85,9 @@ def create_patch_training_set(
   if 'pad' in order_of_preproc_ops:
     assert 'padding' in extra_params
   if 'local_contrast_normalization' in order_of_preproc_ops:
-    assert 'lcn_kernel_sz' in extra_params
+    assert 'lcn_filter_sigma' in extra_params
+  if 'local_luminance_subtraction' in order_of_preproc_ops:
+    assert 'lls_filter_sigma' in extra_params
   if 'standardize_data_range' in order_of_preproc_ops:
     idx_sdr = [x for x in range(len(order_of_preproc_ops))
                if order_of_preproc_ops[x] == 'standardize_data_range']
@@ -97,6 +100,16 @@ def create_patch_training_set(
     flatten_patches = extra_params['flatten_patches']
   else:
     flatten_patches = True  # default behavior is to flatten
+  if 'whiten_center_surround' in order_of_preproc_ops:
+    if 'whitening_cutoff_low' in extra_params:
+      wcl = extra_params['whitening_cutoff_low']
+    else:
+      wcl = 1e-3
+    if 'whitening_cutoff_high' in extra_params:
+      wch = extra_params['whitening_cutoff_high']
+    else:
+      wch = 0.9
+
 
   # pre_patch_imgs is the main datastructure. List so that (pre-patch) images
   # can have different dimensions. Always casted to float32.
@@ -132,6 +145,13 @@ def create_patch_training_set(
   if 'exclude' in extra_params:
     pre_patch_imgs = [pre_patch_imgs[x] for x in range(len(pre_patch_imgs))
                       if x not in extra_params['exclude']]
+
+  if 'local_contrast_normalization' in order_of_preproc_ops:
+    image_local_contrasts = [np.zeros(pre_patch_imgs[x].shape, dtype='float32')
+                             for x in range(len(pre_patch_imgs))]
+  if 'local_luminance_subtraction' in order_of_preproc_ops:
+    image_local_luminances = [np.zeros(pre_patch_imgs[x].shape, dtype='float32')
+                              for x in range(len(pre_patch_imgs))]
 
   num_color_channels = pre_patch_imgs[0].shape[2]
   already_patched_flag = False
@@ -169,6 +189,14 @@ def create_patch_training_set(
       all_patches = np.zeros(
         [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
          num_color_channels], dtype='float32')
+      if 'local_contrast_normalization' in order_of_preproc_ops:
+        all_patches_contrast = np.zeros(
+          [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
+           num_color_channels], dtype='float32')
+      if 'local_luminance_subtraction' in order_of_preproc_ops:
+        all_patches_luminance = np.zeros(
+          [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
+           num_color_channels], dtype='float32')
 
       p_idx = 0
       for batch_idx in range(num_batches):
@@ -181,6 +209,15 @@ def create_patch_training_set(
           all_patches[p_idx] = pre_patch_imgs[img_idx][
             vert_pos:vert_pos+patch_dimensions[0],
             horz_pos:horz_pos+patch_dimensions[1]]
+          if 'local_contrast_normalization' in order_of_preproc_ops:
+            all_patches_contrast[p_idx] = image_local_contrasts[img_idx][
+              vert_pos:vert_pos+patch_dimensions[0],
+              horz_pos:horz_pos+patch_dimensions[1]]
+          if 'local_luminance_subtraction' in order_of_preproc_ops:
+            all_patches_luminance[p_idx] = image_local_luminances[img_idx][
+              vert_pos:vert_pos+patch_dimensions[0],
+              horz_pos:horz_pos+patch_dimensions[1]]
+
           p_idx += 1
         if batch_idx % 1000 == 0 and batch_idx != 0:
           print('Finished creating', batch_idx, 'batches')
@@ -192,7 +229,8 @@ def create_patch_training_set(
                        'patching the images')
       for img_idx in range(len(pre_patch_imgs)):
         pre_patch_imgs[img_idx] = ip_util.whiten_center_surround(
-            pre_patch_imgs[img_idx])
+            pre_patch_imgs[img_idx], cutoffs={'low': wcl, 'high': wch},
+            norm_and_threshold=False)
 
     elif preproc_op == 'whiten_ZCA':
       if not already_patched_flag:
@@ -207,8 +245,22 @@ def create_patch_training_set(
         raise KeyError('We typically preform this before ' +
                        'patching the images')
       for img_idx in range(len(pre_patch_imgs)):
-        pre_patch_imgs[img_idx] = ip_util.local_contrast_normalization(
-            pre_patch_imgs[img_idx], kernel_size=extra_params['lcn_kernel_sz'])
+        pre_patch_imgs[img_idx], image_local_contrasts[img_idx] = \
+            ip_util.local_contrast_normalization(
+            pre_patch_imgs[img_idx],
+            filter_sigma=extra_params['lcn_filter_sigma'],
+            return_normalizer=True)
+
+    elif preproc_op == 'local_luminance_subtraction':
+      if already_patched_flag:
+        raise KeyError('We typically preform this before ' +
+                       'patching the images')
+      for img_idx in range(len(pre_patch_imgs)):
+        pre_patch_imgs[img_idx], image_local_luminances[img_idx] = \
+            ip_util.local_luminance_subtraction(
+            pre_patch_imgs[img_idx],
+            filter_sigma=extra_params['lls_filter_sigma'],
+            return_subtractor=True)
 
     elif preproc_op == 'center_each_component':
       if not already_patched_flag:
@@ -242,6 +294,14 @@ def create_patch_training_set(
       all_patches = np.pad(all_patches,
           ((0, 0),) + extra_params['padding'] + ((0, 0),), mode='constant',
           constant_values=0.)
+      if 'local_contrast_normalization' in order_of_preproc_ops:
+        all_patches_contrast = np.pad(all_patches_contrast,
+            ((0, 0),) + extra_params['padding'] + ((0, 0),), mode='constant',
+            constant_values=0.)
+      if 'local_luminance_subtraction' in order_of_preproc_ops:
+        all_patches_luminance = np.pad(all_patches_luminance,
+            ((0, 0),) + extra_params['padding'] + ((0, 0),), mode='constant',
+            constant_values=0.)
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)
 
@@ -249,11 +309,25 @@ def create_patch_training_set(
   if flatten_patches:
     return_dict = {'batched_patches':
         all_patches.reshape((num_batches, batch_size, -1))}
+    if 'local_contrast_normalization' in order_of_preproc_ops:
+      return_dict['local_contrasts'] = all_patches_contrast.reshape(
+          (num_batches, batch_size, -1))
+    if 'local_luminance_subtraction' in order_of_preproc_ops:
+      return_dict['local_luminances'] = all_patches_luminance.reshape(
+          (num_batches, batch_size, -1))
   else:
     # torch uses a color-channel-first convention so we reshape to reflect this
     return_dict = {'batched_patches': np.moveaxis(
       all_patches.reshape((num_batches, batch_size) + all_patches.shape[1:]),
       4, 2)}
+    if 'local_contrast_normalization' in order_of_preproc_ops:
+      return_dict['local_contrasts'] = np.moveaxis(
+      all_patches_contrast.reshape(
+        (num_batches, batch_size) + all_patches_contrast.shape[1:]), 4, 2)
+    if 'local_luminance_subtraction' in order_of_preproc_ops:
+      return_dict['local_luminances'] = np.moveaxis(
+      all_patches_luminance.reshape(
+        (num_batches, batch_size) + all_patches_luminance.shape[1:]), 4, 2)
 
   if 'center_each_component' in order_of_preproc_ops:
     return_dict['original_component_means'] = orig_means

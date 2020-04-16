@@ -55,9 +55,9 @@ SC_PARAMS = {
     'num_epochs': NUM_EPOCHS,
     'code_inference_algorithm': 'fista',
     'inference_param_schedule': {
-      0: {'sparsity_weight': 0.02, 'num_iters': 25},
-      2*iters_per_epoch: {'sparsity_weight': 0.02, 'num_iters': 50},
-      5*iters_per_epoch: {'sparsity_weight': 0.02, 'num_iters': 100}},
+      0: {'sparsity_weight': 0.008, 'num_iters': 25},
+      2*iters_per_epoch: {'sparsity_weight': 0.008, 'num_iters': 50},
+      5*iters_per_epoch: {'sparsity_weight': 0.008, 'num_iters': 100}},
     'dictionary_update_algorithm': 'sc_cheap_quadratic_descent',
     'dict_update_param_schedule': {
       0: {'stepsize': 0.1, 'num_iters': 1},

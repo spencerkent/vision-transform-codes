@@ -13,7 +13,67 @@ from scipy.signal import convolve2d
 from matplotlib import pyplot as plt
 
 
-def get_low_pass_filter(DFT_num_samples, filter_parameters):
+def filter_sd(image, filter_spatial):
+  """
+  Filters an image using a filter specified in the {s}patial {d}omain
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      The image to be filtered. The filter is applied to each color
+      channel independently.
+  filter_spatial : ndarray(float32 or uint8, size=(fh, fw))
+      The filter has fh samples in the vertical dimension and fw samples in
+      the horizontal dimension
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  """
+  assert image.dtype in ['float32', 'uint8']
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    filtered_image[:, :, color_channel] = convolve2d(
+        image[:, :, color_channel], filter_spatial, 'same', boundary='symm')
+    #^ using the 'symmetric' boundary condition seems to reduce artifacts at
+    #  the image boundary. Worth looking into more closely.
+  return filtered_image
+
+
+def filter_fd(image, filter_DFT):
+  """
+  Filters an image using a filter specified in the {f}requency {d}omain
+
+  This may optionally pad the image so as to match the number of samples in the
+  filter DFT. We should make sure this is greater than or equal to the size of
+  the image.
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      The image to be filtered. The filter is applied to each color
+      channel independently.
+  filter_DFT : ndarray(complex128, size=(fh, fw))
+      The filter has fh samples in the vertical dimension and fw samples in
+      the horizontal dimension
+
+  Returns
+  -------
+  filtered_image : ndarray(float32, size=(h, w, c))
+  """
+  assert image.dtype in ['float32', 'uint8']
+  assert filter_DFT.shape[0] >= image.shape[0], "don't undersample DFT"
+  assert filter_DFT.shape[1] >= image.shape[1], "don't undersample DFT"
+  filtered_image = np.zeros(image.shape, dtype='float32')
+  for color_channel in range(image.shape[2]):
+    filtered_image[:, :, color_channel] = np.real(np.fft.ifft2(
+      filter_DFT * np.fft.fft2(image[:, :, color_channel], filter_DFT.shape),
+      filter_DFT.shape)).astype('float32')[0:image.shape[0], 0:image.shape[1]]
+  return filtered_image
+
+
+def get_low_pass_filter(DFT_num_samples, filter_parameters,
+                        norm_and_threshold=True):
   """
   Returns the DFT of a lowpass filter that can be applied to an image
 
@@ -37,6 +97,9 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
           paper[1] this is 4. We can make the cutoff sharper by increasing
           this number.
       ** elif...
+  norm_and_threshold : bool
+      If true, make sure the maximum magnitude of the transfer function is 1.0
+      and threshold any values below 1e-5
 
   Returns
   -------
@@ -59,15 +122,18 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters):
         -1. * np.power(spatial_freq_mag / (0.5 * filter_parameters['cutoff']),
                        filter_parameters['order']))
     #^ 0.5 is the 2d spatial nyquist frequency
-    lpf_DFT_mag[lpf_DFT_mag < 1e-3] = 1e-3
+    if norm_and_threshold:
+      lpf_DFT_mag[lpf_DFT_mag < 1e-3] = 1e-3
     #^ avoid filter magnitudes that are 'too small' because this will make
     #  undoing the filter introduce arbitrary high-frequency noise
     lpf_DFT_phase = np.zeros(spatial_freq_mag.shape)
+  else:
+    raise KeyError('Unrecognized filter shape: ' + filter_parameters['shape'])
 
   return lpf_DFT_mag * np.exp(1j * lpf_DFT_phase)
 
 
-def get_whitening_ramp_filter(DFT_num_samples):
+def get_whitening_ramp_filter(DFT_num_samples, norm_and_threshold=True):
   """
   Returns the DFT of a simple 'magnitude ramp' filter that whitens data
 
@@ -87,13 +153,14 @@ def get_whitening_ramp_filter(DFT_num_samples):
   two_d_freq = np.meshgrid(freqs_vert, freqs_horz, indexing='ij')
   spatial_freq_mag = (np.sqrt(np.square(two_d_freq[0]) +
                               np.square(two_d_freq[1])))
-  wf_DFT_mag = spatial_freq_mag / np.max(spatial_freq_mag)
-  wf_DFT_mag[wf_DFT_mag < 1e-3] = 1e-3
-  #^ avoid filter magnitudes that are 'too small' because this will make
-  #  undoing the filter introduce arbitrary high-frequency noise
-  wf_DFT_phase = np.zeros(spatial_freq_mag.shape)
-
-  return wf_DFT_mag * np.exp(1j * wf_DFT_phase)
+  if norm_and_threshold:
+    wf_DFT_mag = spatial_freq_mag / np.max(spatial_freq_mag)
+    wf_DFT_mag[wf_DFT_mag < 1e-5] = 1e-5
+    #^ avoid filter magnitudes that are 'too small' because this will make
+    #  undoing the filter introduce arbitrary high-frequency noise
+  else:
+    wf_DFT_mag = spatial_freq_mag
+  return wf_DFT_mag * np.exp(1j * 0)  # zero-phase filter
 
 
 def get_gabor_filter(filter_size, filter_parameters):
@@ -174,111 +241,67 @@ def get_gabor_filter(filter_size, filter_parameters):
   return gabor / np.linalg.norm(gabor)
 
 
-def filter_fd(image, filter_DFT):
+def whiten_center_surround(image, cutoffs, return_filter=False,
+                           norm_and_threshold=True):
   """
-  Filters an image using a filter specified in the {f}requency {d}omain
-
-  This may optionally pad the image so as to match the number of samples in the
-  filter DFT. We should make sure this is greater than or equal to the size of
-  the image.
-
-  Parameters
-  ----------
-  image : ndarray(float32 or uint8, size=(h, w, c))
-      The image to be filtered. The filter is applied to each color
-      channel independently.
-  filter_DFT : ndarray(complex128, size=(fh, fw))
-      The filter has fh samples in the vertical dimension and fw samples in
-      the horizontal dimension
-
-  Returns
-  -------
-  filtered_image : ndarray(float32, size=(h, w, c))
-  """
-  assert image.dtype in ['float32', 'uint8']
-  assert filter_DFT.shape[0] >= image.shape[0], "don't undersample DFT"
-  assert filter_DFT.shape[1] >= image.shape[1], "don't undersample DFT"
-  filtered_image = np.zeros(image.shape, dtype='float32')
-  for color_channel in range(image.shape[2]):
-    filtered_image[:, :, color_channel] = np.real(np.fft.ifft2(
-      filter_DFT * np.fft.fft2(image[:, :, color_channel], filter_DFT.shape),
-      filter_DFT.shape)).astype('float32')[0:image.shape[0], 0:image.shape[1]]
-  return filtered_image
-
-
-def filter_sd(image, filter_spatial):
-  """
-  Filters an image using a filter specified in the {s}patial {d}omain
-
-  Parameters
-  ----------
-  image : ndarray(float32 or uint8, size=(h, w, c))
-      The image to be filtered. The filter is applied to each color
-      channel independently.
-  filter_spatial : ndarray(float32 or uint8, size=(fh, fw))
-      The filter has fh samples in the vertical dimension and fw samples in
-      the horizontal dimension
-
-  Returns
-  -------
-  filtered_image : ndarray(float32, size=(h, w, c))
-  """
-  assert image.dtype in ['float32', 'uint8']
-  filtered_image = np.zeros(image.shape, dtype='float32')
-  for color_channel in range(image.shape[2]):
-    filtered_image[:, :, color_channel] = convolve2d(
-        image[:, :, color_channel], filter_spatial, 'same')
-  return filtered_image
-
-
-def whiten_center_surround(image, return_filter=False):
-  """
-  Applies the scheme described in the Vision Research sparse coding paper [1]
+  Slight mod to scheme described in the Vision Research sparse coding paper [1]
 
   We have the composition of a low pass filter with a ramp in spatial frequency
-  which together produces a center-surround filter in the image domain
+  which together produces a center-surround filter in the image domain. The
+  wrinkle is that we can flatten off the transfer function in the low frequency
+  band so it passes some low frequency information through. This is useful for
+  making the unwhitening computation more well-behaved and for passing of the
+  responsibility of coding low-freq information to a subsequent step of
+  processing, for instance `local_luminance_subtraction` (see below).
 
   Parameters
   ----------
   image : ndarray(float32 or uint8, size=(h, w, c))
       An image of height h and width w, with c color channels
   return_filter : bool, optional
-      If true, also return the DFT of the used filter. Just for visualization
-      and debugging purposes. Default False.
+      If true, also return the DFT of the used filter. Just for unwhitening,
+      visualization, and debugging purposes. Default False.
   """
   assert image.dtype in ['float32', 'uint8']
   lpf = get_low_pass_filter(image.shape,
-      {'shape': 'exponential', 'cutoff': 0.8, 'order': 4.0})
-  wf = get_whitening_ramp_filter(image.shape)
-  combined_filter = wf * lpf
-  combined_filter /= np.max(np.abs(combined_filter))
-  #^ make the maximum filter magnitude equal to 1
+      {'shape': 'exponential', 'cutoff': cutoffs['high'], 'order': 8.0},
+      norm_and_threshold=False)
+  wf = get_whitening_ramp_filter(image.shape, norm_and_threshold=False)
+  rolled_off_ramp = np.maximum(wf, cutoffs['low'] * np.ones(wf.shape))
+  combined_filter = rolled_off_ramp * lpf
+  if norm_and_threshold:
+    combined_filter /= np.max(np.abs(combined_filter))
+    combined_filter[np.abs(combined_filter) < 1e-3] = 1e-3
   if return_filter:
     return filter_fd(image, combined_filter), combined_filter
   else:
     return filter_fd(image, combined_filter)
 
 
-def unwhiten_center_surround(image, orig_filter_DFT=None):
+def unwhiten_center_surround(image, low_cutoff=None, orig_filter_DFT=None):
   """
-  Undoes center-surround whitening
+  Undoes center-surround whitening. If the original filter DFT is provided
+  this is used to exactly invert the filter. If not provided, we drop the
+  the low pass part and whiten with a rolled-off ramp filter based on the
+  specified cutoffs.
 
   Parameters
   ----------
   image : ndarray(float32, size=(h, w, c))
       An image of height h and width w, with c color channels
+  low_cutoff : float, optional
+      The lowpass cutoff that rolls off the ramp filter to pass DC. Ignored
+      if orig_filter_DFT is provided. Default None.
   orig_filter_DFT : ndarray(complex128), optional
-      If not None, this is used to invert the whitening. Otherwise, we just
-      guess that it's the standard 4th-order exponential times the ramp filter
+      If not None, this is used to invert the whitening exactly. Default None.
   """
   assert image.dtype == 'float32'
+  assert not ((low_cutoff is None) and (orig_filter_DFT is None))
   if orig_filter_DFT is None:
-    # then guess the original filter DFT
-    lpf = get_low_pass_filter(image.shape,
-        {'shape': 'exponential', 'cutoff': 0.8, 'order': 4.0})
-    wf = get_whitening_ramp_filter(image.shape)
-    orig_filter_DFT = wf * lpf
-    orig_filter_DFT /= np.max(np.abs(orig_filter_DFT))
+    # synthesize a whitening filter but don't use the upper low pass filter.
+    # inverting this causes problems with noise and instability
+    wf = get_whitening_ramp_filter(image.shape, norm_and_threshold=False)
+    orig_filter_DFT = np.maximum(wf, low_cutoff * np.ones(wf.shape))
   return filter_fd(image, 1. / orig_filter_DFT)
 
 
@@ -407,7 +430,7 @@ def unwhiten_ZCA(white_flat_data, precomputed_ZCA_parameters):
   return colored_data
 
 
-def local_contrast_normalization(image, kernel_size, return_normalizer=False):
+def local_contrast_normalization(image, filter_sigma, return_normalizer=False):
   """
   Computes an estimate of the local contrast and removes this from an image
 
@@ -415,8 +438,9 @@ def local_contrast_normalization(image, kernel_size, return_normalizer=False):
   ----------
   image : ndarray(float32 or uint8, size=(h, w, c))
       An image of height h and width w, with c color channels
-  kernel_size : tuple(int, int)
-      The size of the gaussian kernel used
+  filter_sigma : tuple(int, int)
+      The standard deviation of the isotropic gaussian kernel that we use to
+      compute a local estimate of the variance
   return_normalizer : bool, optional
       If true, return the array used to do the normalization -- this can be
       used to reverse the transform. Defualt False.
@@ -426,24 +450,27 @@ def local_contrast_normalization(image, kernel_size, return_normalizer=False):
   filtered_image : ndarray(float32, size=(h, w, c))
   normalizer : ndarray(float32, size=(h, w, c)), if return_normalizer=True
   """
-  v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
-                       int(np.ceil(kernel_size[0]/2)))
-  h_coords = np.arange(-int(np.floor(kernel_size[1]/2)),
-                       int(np.ceil(kernel_size[1]/2)))
+  window_size = 2  # in terms of sigma. This gives the size of FIR filter
+  v_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+                       int(np.ceil(window_size*filter_sigma))+1)
+  h_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+                       int(np.ceil(window_size*filter_sigma))+1)
   kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
-  g_variance = np.floor(max(kernel_size[0], kernel_size[1])/2)**2
-  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) /
+                           (filter_sigma**2))
   gaussian_kernel /= np.sum(gaussian_kernel)
 
   local_variance = filter_sd(image**2, gaussian_kernel)
 
+  # TODO: deal with divide by zero
+  local_variance[local_variance == 0] = 1.
   if return_normalizer:
     return image / np.sqrt(local_variance), np.sqrt(local_variance)
   else:
     return image / np.sqrt(local_variance)
 
 
-def local_luminance_subtraction(image, kernel_size, return_subtractor=False):
+def local_luminance_subtraction(image, filter_sigma, return_subtractor=False):
   """
   Computes an estimate of the local luminance and removes this from an image
 
@@ -451,8 +478,9 @@ def local_luminance_subtraction(image, kernel_size, return_subtractor=False):
   ----------
   image : ndarray(float32 or uint8, size=(h, w, c))
       An image of height h and width w, with c color channels
-  kernel_size : tuple(int, int)
-      The size of the gaussian kernel used
+  filter_sigma : float
+      The standard deviation of the isotropic gaussian kernel that we use to
+      compute a local estimate of the luminance
   return_subtractor : bool, optional
       If true, return the array used to do the luminance subtraction -- this
       can be used to reverse the transform. Defualt False.
@@ -462,27 +490,22 @@ def local_luminance_subtraction(image, kernel_size, return_subtractor=False):
   filtered_image : ndarray(float32, size=(h, w, c))
   subtractor : ndarray(float32, size=(h, w, c))
   """
-  v_coords = np.arange(-int(np.floor(kernel_size[0]/2)),
-                       int(np.ceil(kernel_size[0]/2)))
-  h_coords = np.arange(-int(np.floor(kernel_size[1]/2)),
-                       int(np.ceil(kernel_size[1]/2)))
+  window_size = 2  # in terms of sigma. This gives the size of FIR filter
+  v_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+                       int(np.ceil(window_size*filter_sigma))+1)
+  h_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+                       int(np.ceil(window_size*filter_sigma))+1)
   kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
-  g_variance = np.floor(max(kernel_size[0], kernel_size[1])/2)**2
-  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / g_variance)
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) /
+                           (filter_sigma**2))
   gaussian_kernel /= np.sum(gaussian_kernel)
 
-  filtered_image = np.zeros(image.shape, dtype='float32')
-  local_luminance = np.zeros(image.shape, dtype='float32')
-  for color_channel in range(image.shape[2]):
-    local_luminance[:, :, color_channel] = convolve2d(
-        image[:, :, color_channel], gaussian_kernel, 'same')
-    filtered_image[:, :, color_channel] = (image[:, :, color_channel] -
-        local_luminance[:, :, color_channel])
+  local_luminance = filter_sd(image, gaussian_kernel)
 
   if return_subtractor:
-    return filtered_image, local_luminance
+    return image - local_luminance, local_luminance
   else:
-    return filtered_image
+    return image - local_luminance
 
 
 def center_each_component(flat_data):

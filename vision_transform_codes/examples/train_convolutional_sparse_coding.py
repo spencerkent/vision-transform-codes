@@ -76,9 +76,9 @@ SC_PARAMS = {
     'padding': (vert_padding, horz_padding),
     'code_inference_algorithm': 'ista',
     'inference_param_schedule': {
-      0: {'sparsity_weight': 0.02, 'num_iters': 25},
-      2*iters_per_epoch: {'sparsity_weight': 0.02, 'num_iters': 50},
-      5*iters_per_epoch: {'sparsity_weight': 0.02, 'num_iters': 100}},
+      0: {'sparsity_weight': 0.008, 'num_iters': 25},
+      2*iters_per_epoch: {'sparsity_weight': 0.008, 'num_iters': 50},
+      5*iters_per_epoch: {'sparsity_weight': 0.008, 'num_iters': 100}},
     'dictionary_update_algorithm': 'sc_cheap_quadratic_descent',
     'dict_update_param_schedule': {
       0: {'stepsize': 0.005, 'num_iters': 1},

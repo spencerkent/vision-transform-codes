@@ -39,17 +39,17 @@ def main():
   visualize_lp_filtering(np.squeeze(orig_img), np.squeeze(lpf_img), lpf,
                          np.squeeze(orig_img_recovered), dft_num_samples)
 
+
   ################################################
   # Whiten with 'Atick and Redlich' whitening, the
   # whitening originally used in sparse coding
   ################################################
-  orig_img = unprocessed_images[4]  # arbitrary
-  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
   dft_num_samples = orig_img.shape[:2]
   white_img, white_filt = im_proc.whiten_center_surround(
-      orig_img, return_filter=True)
-  orig_img_recovered = im_proc.unwhiten_center_surround(white_img, white_filt)
-  # A little visualization
+      orig_img, cutoffs={'low': 0.00, 'high': 0.8}, return_filter=True)
+  orig_img_recovered = im_proc.unwhiten_center_surround(white_img,
+      orig_filter_DFT=white_filt)
+  # ^exact unwhitening
   visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
                          white_filt, np.squeeze(orig_img_recovered),
                          dft_num_samples)
@@ -63,13 +63,11 @@ def main():
   print('Computing ZCA transform...')
   print('Creating a dataset of patches')
   one_mil_image_patches = dset_generation.create_patch_training_set(
-      num_batches=1, batch_size=1000000, patch_dimensions=(8, 8), 
-      edge_buffer=5, dataset='Kodak_BW', 
+      num_batches=1, batch_size=1000000, patch_dimensions=(8, 8),
+      edge_buffer=5, dataset='Kodak_BW',
       order_of_preproc_ops=['patch'])['batched_patches'][0]
   _, ZCA_params = im_proc.whiten_ZCA(one_mil_image_patches)
   print('Applying transform to test image')
-  orig_img = unprocessed_images[4]  # arbitrary
-  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
   orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
       orig_img, (8, 8), flatten_patches=True)
   white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
@@ -86,10 +84,8 @@ def main():
   ##############################
   # Local contrast normalization
   ##############################
-  orig_img = unprocessed_images[4]  # arbitrary
-  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
   normalized_img, normalizer = im_proc.local_contrast_normalization(
-      orig_img, (17, 17), return_normalizer=True)
+      orig_img, 8, return_normalizer=True)
   orig_img_recovered = normalized_img * normalizer
   visualize_lcn(np.squeeze(orig_img), np.squeeze(normalized_img),
                 np.squeeze(normalizer), np.squeeze(orig_img_recovered))
@@ -98,14 +94,49 @@ def main():
   #############################
   # Local luminance subtraction
   #############################
-  orig_img = unprocessed_images[4]  # arbitrary
-  orig_img = orig_img[:, :, None]  # all imgs get a color channel even if grey
+  g_sigma_spatial = 8  # sigma for gaussian filter in spatial domain
+  g_sigma_freq = 1. / (2 * np.pi * g_sigma_spatial)
   centered_img, subtractor = im_proc.local_luminance_subtraction(
-      orig_img, (17, 17), return_subtractor=True)
+      orig_img, 8, return_subtractor=True)
   orig_img_recovered = centered_img + subtractor
   visualize_lls(np.squeeze(orig_img), np.squeeze(centered_img),
-                np.squeeze(subtractor), np.squeeze(orig_img_recovered))
+                np.squeeze(subtractor), np.squeeze(orig_img_recovered),
+                g_sigma_freq)
 
+
+  # ######################################
+  # # This is the type of preprocessing
+  # # I currently recommend for sparse
+  # # coding in the context of compression
+  # ######################################
+  # # The idea is to pass low-frequencies THROUGH the whitening filter and
+  # # subtract them out with local luminance subtraction -- we can tune the
+  # # whitening filter's passband so that it all gets sucked up by the
+  # # second stage:
+  # gfilt_sigma_sd = 8  # a gaussian filter with a standard deviation of 8 pix
+  # wf_cutoff_high = 0.9
+  # lp_cutoff_attenuation_factor = 100  # calc. freq where power atten. by 100
+  # gfilt_sigma_fd = 1. / (2 * np.pi * gfilt_sigma_sd)  # in frequency domain
+  # wf_cutoff_low = (np.sqrt(2 * np.log(np.sqrt(lp_cutoff_attenuation_factor))) *
+  #                  gfilt_sigma_fd)
+  # dft_num_samples = orig_img.shape[:2]
+  # white_img, white_filt = im_proc.whiten_center_surround(
+  #     orig_img, cutoffs={'low': wf_cutoff_low, 'high': wf_cutoff_high},
+  #     norm_and_threshold=False, return_filter=True)
+  # white_centered_img, wc_subtractor = im_proc.local_luminance_subtraction(
+  #     white_img, gfilt_sigma_sd, return_subtractor=True)
+  # white_img_recovered = white_centered_img + wc_subtractor
+  # # when we do sparse coding there will be noise that we don't want to
+  # # accentuate. Therefore, rather than do exact unwhitening, we don't unwhiten
+  # # the low frequencies.
+  # orig_img_recovered = im_proc.unwhiten_center_surround(
+  #     white_img_recovered, low_cutoff=wf_cutoff_low)
+  # visualize_lls(np.squeeze(white_img), np.squeeze(white_centered_img),
+  #               np.squeeze(wc_subtractor), np.squeeze(white_img_recovered),
+  #               g_sigma=gfilt_sigma_fd)
+  # visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+  #                        white_filt, np.squeeze(orig_img_recovered),
+  #                        dft_num_samples)
 
   plt.show()
 
@@ -150,8 +181,9 @@ def visualize_lp_filtering(o_img, lp_img, lpf_filt,
 
   ax = fig.add_subplot(gridspec[1, 0])
   ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
-  orig_dft_im = ax.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+  mag = np.abs(np.fft.fft2(o_img, dft_nsamps))
+  safe_log10(mag)
+  orig_dft_im = ax.imshow(np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   if tall_skinny:
@@ -166,8 +198,9 @@ def visualize_lp_filtering(o_img, lp_img, lpf_filt,
 
   ax = fig.add_subplot(gridspec[1, 1])
   ax.set_title('(log) magnitude of 2D DFT\nlow-pass image', fontsize=10)
-  lp_dft_im = ax.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(lp_img, dft_nsamps)))),
+  mag = np.abs(np.fft.fft2(lp_img, dft_nsamps))
+  safe_log10(mag)
+  lp_dft_im = ax.imshow(np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   if tall_skinny:
@@ -182,7 +215,9 @@ def visualize_lp_filtering(o_img, lp_img, lpf_filt,
 
   ax = fig.add_subplot(gridspec[1, 2])
   ax.set_title('(log) magnitude of 2D DFT\nlow-pass filter', fontsize=10)
-  imax = ax.imshow(np.log10(np.fft.fftshift(np.abs(lpf_filt))), cmap='magma',
+  mag = np.abs(lpf_filt)
+  safe_log10(mag)
+  imax = ax.imshow(np.fft.fftshift(mag), cmap='magma',
                     aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   if tall_skinny:
@@ -286,8 +321,10 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
 
   ax = fig.add_subplot(gridspec[1, 0])
   ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
+  mag = np.abs(np.fft.fft2(o_img, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -299,8 +336,10 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
 
   ax = fig.add_subplot(gridspec[1, 1])
   ax.set_title('(log) magnitude of 2D DFT\nwhitened image', fontsize=10)
+  mag = np.abs(np.fft.fft2(w_img, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(w_img, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -312,7 +351,9 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
 
   ax = fig.add_subplot(gridspec[1, 2])
   ax.set_title('(log) magnitude of 2D DFT\nwhitening filter', fontsize=10)
-  imax = plt.imshow(np.fft.fftshift(np.log10(np.abs(w_filt))), cmap='magma',
+  mag = np.abs(w_filt)
+  safe_log10(mag)
+  imax = plt.imshow(np.fft.fftshift(mag), cmap='magma',
                     aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -676,8 +717,10 @@ def visualize_lcn(o_img, normed_img, normalizer, o_img_recovered):
   dft_nsamps = o_img.shape
   ax = fig.add_subplot(gridspec[1, 0])
   ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
+  mag = np.abs(np.fft.fft2(o_img, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -690,8 +733,10 @@ def visualize_lcn(o_img, normed_img, normalizer, o_img_recovered):
   ax = fig.add_subplot(gridspec[1, 1])
   ax.set_title('(log) magnitude of 2D DFT\ncontrast-normalized image',
                fontsize=10)
+  mag = np.abs(np.fft.fft2(normed_img, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(normed_img, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -704,8 +749,10 @@ def visualize_lcn(o_img, normed_img, normalizer, o_img_recovered):
   ax = fig.add_subplot(gridspec[1, 2])
   ax.set_title('(log) magnitude of 2D DFT\ndivided-out local contrast',
                fontsize=10)
+  mag = np.abs(np.fft.fft2(normalizer, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(normalizer, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -834,7 +881,7 @@ def visualize_lcn(o_img, normed_img, normalizer, o_img_recovered):
   plt.tight_layout()
 
 
-def visualize_lls(o_img, centered_img, subtractor, o_img_recovered):
+def visualize_lls(o_img, centered_img, subtractor, o_img_recovered, g_sigma):
   fig = plt.figure(figsize=(15, 8), dpi=100)
   fig.suptitle('Local Luminance Subtraction', fontsize=12)
   sp_colwidths = [1, 1, 1, 1]
@@ -868,8 +915,10 @@ def visualize_lls(o_img, centered_img, subtractor, o_img_recovered):
   dft_nsamps = o_img.shape
   ax = fig.add_subplot(gridspec[1, 0])
   ax.set_title('(log) magnitude of 2D DFT\noriginal image', fontsize=10)
+  mag = np.abs(np.fft.fft2(o_img, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(o_img, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -896,8 +945,10 @@ def visualize_lls(o_img, centered_img, subtractor, o_img_recovered):
   ax = fig.add_subplot(gridspec[1, 2])
   ax.set_title('(log) magnitude of 2D DFT\nsubtraced-out local luminance',
                fontsize=10)
+  mag = np.abs(np.fft.fft2(subtractor, dft_nsamps))
+  safe_log10(mag)
   orig_dft_im = plt.imshow(
-      np.fft.fftshift(np.log10(np.abs(np.fft.fft2(subtractor, dft_nsamps)))),
+      np.fft.fftshift(mag),
       cmap='magma', aspect=dft_nsamps[1]/dft_nsamps[0])
   divider = make_axes_locatable(ax)
   cax = divider.append_axes("right", size="5%", pad=-0.2)
@@ -935,8 +986,24 @@ def visualize_lls(o_img, centered_img, subtractor, o_img_recovered):
   ax.set_xscale('log')
   ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
   ax.set_ylabel('Normalized signal power', fontsize=8)
+  ax.axvline(g_sigma, color='r', linestyle='--')
 
   ax = fig.add_subplot(gridspec[2, 2])
+  n_img_fpower = np.abs(np.fft.fft2(subtractor))**2
+  freq_coords = np.meshgrid(np.fft.fftfreq(subtractor.shape[0]),
+                            np.fft.fftfreq(subtractor.shape[1]), indexing='ij')
+  fpower_mean, f = rotational_average(n_img_fpower, 200, freq_coords)
+  fpower_mean /= np.max(fpower_mean)
+  ax.plot(f, fpower_mean)
+  ax.set_ylim([np.min(fpower_mean), np.max(fpower_mean)])
+  ax.set_xlim([f[1], f[-1]])
+  ax.set_yscale('log')
+  ax.set_xscale('log')
+  ax.set_xlabel('Frequency (units of sampling freq)', fontsize=8)
+  ax.set_ylabel('Normalized signal power', fontsize=8)
+  ax.axvline(g_sigma, color='r', linestyle='--')
+
+  ax = fig.add_subplot(gridspec[1, 3])
   ax.set_title('Joint density of adjacent pixels\noriginal image', fontsize=10)
   # estimate the joint distribution of any arbitrary pair of adjacent pixels
   num_rand_samps = 10000
@@ -1025,7 +1092,11 @@ def visualize_lls(o_img, centered_img, subtractor, o_img_recovered):
 
   plt.tight_layout()
 
-
+def safe_log10(nonneg_tensor):
+  zeros_inds = (nonneg_tensor == 0)
+  nonzeros_inds = (nonneg_tensor > 0)
+  nonneg_tensor[nonzeros_inds] = np.log10(nonneg_tensor[nonzeros_inds])
+  nonneg_tensor[zeros_inds] = np.min(nonneg_tensor[nonzeros_inds])
 
 
 if __name__ == '__main__':
