@@ -7,14 +7,12 @@ import numpy as np
 from scipy.stats import kurtosis
 from skimage.measure import compare_ssim as ssim
 from matplotlib import pyplot as plt
+from matplotlib.image import NonUniformImage
 import matplotlib.gridspec as gridspec
-from matplotlib.ticker import FormatStrFormatter
-from matplotlib.lines import Line2D
-from matplotlib.colors import Normalize
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-import torch
+from matplotlib.ticker import FormatStrFormatter, StrMethodFormatter
 
 tab10colors = plt.get_cmap('tab10').colors
+blue_red = plt.get_cmap('RdBu_r')
 
 
 def compute_pSNR(target, reconstruction, manual_sig_mag=None):
@@ -41,8 +39,66 @@ def compute_ssim(target, reconstruction, manual_sig_mag=None):
               gaussian_weights=True, sigma=1.5, use_sample_covariance=False)
 
 
-def display_dictionary(dictionary, renormalize=False,
-                       reshaping=None, plot_title=""):
+def standardize_for_imshow(image):
+  """
+  A luminance standardization for pyplot's imshow
+
+  This just allows me to specify a simple, transparent standard for what white
+  and black correspond to in pyplot's imshow method. Likely could be
+  accomplished by the colors.Normalize method, but I want to make this as
+  explicit as possible. If the image is nonnegative, we divide by the scalar
+  that makes the largest value 1.0. If the image is nonpositive, we
+  divide by the scalar that makes the smallest value -1.0, and then add 1, so
+  that this value is 0.0, pitch black. If the image has both positive and
+  negative values, we divide and shift so that 0.0 in the original image gets
+  mapped to 0.5 for imshow and the largest absolute value gets mapped to
+  either 0.0 or 1.0 depending on whether it was positive of negative.
+
+  Parameters
+  ----------
+  image : ndarray
+      The image to be standardized, can be (h, w) or (h, w, c). All operations
+      are scalar operations applied to every color channel.
+
+  Returns
+  -------
+  standardized_image : ndarray
+      An RGB image in the range [0.0, 1.0], ready to be showed by imshow.
+  raw_val_mapping : tuple(float, float, float)
+      Indicates what raw values got mapped to 0.0, 0.5, and 1.0, respectively
+  """
+  max_val = np.max(image)
+  min_val = np.min(image)
+  if max_val == min_val:  # constant value
+    standardized_image = 0.5 * np.ones(image.shape)
+    if max_val > 0:
+      raw_val_mapping = [0.0, max_val, 2*max_val]
+    elif max_val < 0:
+      raw_val_mapping = [2*max_val, max_val, 0.0]
+    else:
+      raw_val_mapping = [-1.0, 0.0, 1.0]
+  else:
+    if min_val >= 0:
+      standardized_image = image / max_val
+      raw_val_mapping = [0.0, 0.5*max_val, max_val]
+    elif max_val <= 0:
+      standardized_image = (image / -min_val) + 1.0
+      raw_val_mapping = [min_val, 0.5*min_val, 0.0]
+    else:
+      # straddles 0.0. We want to map 0.0 to 0.5 in the displayed image
+      skew_toward_max = np.argmax([abs(min_val), abs(max_val)])
+      if skew_toward_max:
+        normalizer = (2 * max_val)
+        raw_val_mapping = [-max_val, 0.0, max_val]
+      else:
+        normalizer = (2 * np.abs(min_val))
+        raw_val_mapping = [min_val, 0.0, -min_val]
+      standardized_image = (image / normalizer) + 0.5
+  return standardized_image, raw_val_mapping
+
+
+def display_dictionary(dictionary, renormalize=False, reshaping=None,
+                       highlighting=None, plot_title=""):
   """
   Plot each of the dictionary elements side by side
 
@@ -54,17 +110,28 @@ def display_dictionary(dictionary, renormalize=False,
       image it is trying to represent. n is the size of the image and s the
       number of basis functions. If the size of dictionary is (s, c, kh, kw),
       this is a 'convolutional' dictionary where each basis element is
-      (potentially much smaller) than the image it is trying to represent. c
+      (potentially much) smaller than the image it is trying to represent. c
       is the number of channels that in the input space, kh is the dictionary
       kernel height, and kw is the dictionary kernel width.
-      A dictionary, the matrix used in the linear synthesis transform
   renormalize : bool, optional
-      If present, renormalize each basis function to the interval [-1, 1]
-      before displaying. Otherwise they are displayed on their original scale.
+      If present, display basis functions on their own color scale, using
+      standardize_for_imshow() to put values in the range [0, 1]. Will
+      accentuate the largest-magnitude values in the dictionary element.
       Default False.
-  reshaping : tuple(int, int) if fully-connected, otherwise None
-      If not None, this is the dimension of each patch before vectorization
-      to size n. We reshape the dictionary elements based on this.
+  reshaping : tuple(int, int), optional
+      Should only be specified for a fully-connected dictionary (where
+      dictionary.ndim==2). The dimension of each patch before vectorization
+      to size n. We reshape the dictionary elements based on this. Default None
+  highlighting : dictionary, optional
+      This is used to re-sort and color code the dictionary elements according
+      to scalar weights. Has two keys:
+      'weights' : ndarray(float, size=(s,))
+        The weights for each dictionary element
+      'color_range': tuple(float, float)
+        Values less than or equal to highlighting['color_range'][0] get mapped
+        to dark blue, and values greater than or equal to
+        highlighting['color_range'][1] get mapped to dark red.
+      Default None.
   plot_title : str, optional
       The title of the plot. Default ""
 
@@ -74,33 +141,36 @@ def display_dictionary(dictionary, renormalize=False,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  t_ims, dscale = get_dictionary_tile_imgs(dictionary,
-      reshape_to_these_dims=reshaping, indv_renorm=renormalize)
+  t_ims, raw_val_mapping = get_dictionary_tile_imgs(
+      dictionary, reshape_to_these_dims=reshaping, indv_renorm=renormalize,
+      highlights=highlighting)
   fig_refs = []
   for fig_idx in range(len(t_ims)):
-    fig = plt.figure(figsize=(15, 15))
-    plt.title(plot_title + ', fig {} of {}'.format(
+    fig = plt.figure(figsize=(10, 10))
+    ax = plt.axes([0.075, 0.075, 0.85, 0.85])  # [bottom, left, height, width]
+    fig.suptitle(plot_title + ', fig {} of {}'.format(
                  fig_idx+1, len(t_ims)), fontsize=20)
-    display_gray = True if t_ims[fig_idx].shape[-1] == 1 else False
-    if display_gray:
-      im_ref = plt.imshow(np.squeeze(t_ims[fig_idx]), cmap='Greys_r',
-                          vmin=dscale[0], vmax=dscale[1], interpolation='None')
-    else:
-      im_ref = plt.imshow(t_ims[fig_idx], interpolation='None',
-                          vmin=dscale[0], vmax=dscale[1])
-      #TODO: make sure this is right for RGB
+    im_ref = ax.imshow(t_ims[fig_idx], interpolation='None')
+    ax.axis('off')
     if not renormalize:
-      cbar_ref = plt.colorbar(im_ref, shrink=0.25)
-    # Otherwise it is expected that white is 1.0, Black is -1.0
-    plt.axis('off')
-    plt.tight_layout(pad=4)
+      # add a luminance colorbar. Because there isn't good rgb colorbar
+      # support in pyplot I hack this by adding another image subplot
+      cbar_ax = plt.axes([0.945, 0.4, 0.01, 0.2])
+      gradient = np.linspace(1.0, 0.0, 256)[:, None]
+      cbar_ax.imshow(gradient, cmap='gray')
+      cbar_ax.set_aspect('auto')
+      cbar_ax.yaxis.tick_right()
+      cbar_ax.xaxis.set_ticks([])
+      cbar_ax.yaxis.set_ticks([255, 128, 0])
+      cbar_ax.yaxis.set_ticklabels(['{:.2f}'.format(x)
+                                    for x in raw_val_mapping], fontsize=8)
     fig_refs.append(fig)
 
   return fig_refs
 
 
 def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
-                             reshape_to_these_dims=None):
+                             reshape_to_these_dims=None, highlights=None):
   """
   Arranges a dictionary into a series of imgs that tile elements side by side
 
@@ -110,53 +180,39 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
   Parameters
   ----------
   dictionary : ndarray(float32, size=(s, n) OR (s, c, kh, kw))
-      See docstring of display_dictionary below.
+      See docstring of display_dictionary above.
   indv_renorm : bool, optional
-      If true, renormalize the pixel values for each individual basis function
-      to the interval [-1, 1], making 0 the mean value of the patch. This makes
-      it easier to see what's going on in patches that have low contrast
-      compared to the others. It removes the ability to compare patches, but it
-      allows on to better examine structure within a patch. Default False.
-  reshape_to_these_dims : tuple(int, int) if fully-connected, otherwise None
-      If not None, this is the dimension of each patch before vectorization
-      to size n. We reshape the dictionary elements based on this.
+      See docstring of display_dictionary above.
+  reshape_to_these_dims : tuple(int, int), optional
+      See docstring of display_dictionary above.
+  highlights : dictionary, optional
+      See docstring of display_dictionary above.
 
   Returns
   -------
   tile_imgs : list(ndarray)
       Each element is an image to be displayed by imshow
-  display_range : tuple(float, float)
-      Pass this to imshow to be sure that values are displayed
-      on the correct scale.
+  imshow_to_raw_mapping : tuple(float, float, float)
+      Returned by standardize_for_imshow(), this indicates which values in the
+      original dictionary got mapped to 0.0, 0.5, and 1.0, respectively, in
+      the displayed image.
   """
-  def determine_display_range(raw_dict):
-    max_de_val = np.max(raw_dict)
-    min_de_val = np.min(raw_dict)
-    skew_toward_max = np.argmax([abs(min_de_val), abs(max_de_val)])
-    if max_de_val == min_de_val:  # constant value
-      if min_de_val == 0:
-        display_range = [-1, 1]
-      elif min_de_val >= 0:
-        display_range = [0, 2 * max_de_val]
-      else:
-        display_range = [2 * min_de_val, 0]
-    else:
-      if min_de_val >= 0:
-        display_range = [0, max_de_val]
-      elif max_de_val <= 0:
-        display_range = [min_de_val, 0]
-      else:
-        # probably the most common case
-        if skew_toward_max:
-          display_range = [-max_de_val, max_de_val]
-        else:
-          display_range = [min_de_val, -min_de_val]
-    return display_range
-
   if indv_renorm:
-    display_range = [-1, 1]
+    imshow_to_raw_mapping = None  # each dict element put on their own scale
   else:
-    display_range = determine_display_range(dictionary)
+    dictionary, imshow_to_raw_mapping = standardize_for_imshow(dictionary)
+
+  if highlights is not None:
+    # reorder by weight
+    new_ordering = np.argsort(highlights['weights'])[::-1]
+    dictionary = dictionary[new_ordering]
+    highlights['weights'] = highlights['weights'][new_ordering]
+    weight_colors = (
+        (highlights['weights'] - highlights['color_range'][0]) /
+        (highlights['color_range'][1] - highlights['color_range'][0]))
+    if highlights['color_range'][0] >= 0 or highlights['color_range'][1] <= 0:
+      print('Warning: Red and Blue will not correspond',
+            'to positive and negative weights')
 
   max_de_per_img = 80*80  # max 80x80 {d}ictionary {e}lements per tile img
   assert np.sqrt(max_de_per_img) % 1 == 0, 'please pick a square number'
@@ -174,61 +230,95 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
   if dictionary.ndim == 2:
     assert reshape_to_these_dims is not None
     basis_elem_size = reshape_to_these_dims
-    if len(basis_elem_size) == 2:
-      basis_elem_size = basis_elem_size + (1,)
   else:
     basis_elem_size = np.array(dictionary.shape[1:])[[1, 2, 0]]
 
-  h_margin = 2
-  w_margin = 2
+  if highlights is None:
+    h_margin = 2
+    w_margin = 2
+  else:
+    # little extra room for the highlights
+    h_margin = 6
+    w_margin = 6
+    hl_h_margin = 2  # pixel width of the highlights
+    hl_w_margin = 2
   full_img_height = (basis_elem_size[0] * plot_sidelength +
-                     (plot_sidelength - 1) * h_margin)
+                     (plot_sidelength + 1) * h_margin)
   full_img_width = (basis_elem_size[1] * plot_sidelength +
-                    (plot_sidelength - 1) * w_margin)
+                    (plot_sidelength + 1) * w_margin)
+
   de_idx = 0
   tile_imgs = []
   for in_de_img_idx in range(num_tile_imgs):
-    image_matrix_shape = (full_img_height, full_img_width, basis_elem_size[2])
-    composite_img = display_range[1] * np.ones(image_matrix_shape)
+    image_matrix_shape = (full_img_height, full_img_width, 3)
+    composite_img = np.ones(image_matrix_shape)
     img_de_idx = de_idx % de_per_img
     while img_de_idx < de_per_img and de_idx < num_de:
 
       if dictionary.ndim == 2:
         this_de = dictionary[de_idx, :]
-        this_de = this_de.reshape(basis_elem_size)
+        if len(basis_elem_size) == 2:
+          this_de = np.repeat(
+              this_de.reshape(basis_elem_size)[:, :, None], 3, axis=2)
+        else:
+          this_de = this_de.reshape(basis_elem_size)
       else:
         this_de = np.moveaxis(dictionary[de_idx], 0, 2)
 
       if indv_renorm:
-        this_de = this_de - np.mean(this_de)  # mean-zero
-        this_de = this_de / np.max(np.abs(this_de))  # most extr. val -1 or +1
+        this_de, _ = standardize_for_imshow(this_de)
 
-      # okay, now actually plot the DEs in this tile image
+      # okay, now actually place the DEs in this tile image
       row_idx = img_de_idx // plot_sidelength
       col_idx = img_de_idx % plot_sidelength
-      pxr1 = row_idx * (basis_elem_size[0] + h_margin)
+      pxr1 = row_idx * (basis_elem_size[0] + h_margin) + h_margin
       pxr2 = pxr1 + basis_elem_size[0]
-      pxc1 = col_idx * (basis_elem_size[1] + w_margin)
+      pxc1 = col_idx * (basis_elem_size[1] + w_margin) + w_margin
       pxc2 = pxc1 + basis_elem_size[1]
       composite_img[pxr1:pxr2, pxc1:pxc2] = this_de
+      if highlights is not None:
+        rgb_color = blue_red(weight_colors[de_idx])[:3]
+        composite_img[pxr1-hl_h_margin:pxr1,
+                      pxc1-hl_w_margin:pxc2 + hl_w_margin] = rgb_color
+        composite_img[pxr2:pxr2+hl_h_margin,
+                      pxc1-hl_w_margin:pxc2 + hl_w_margin] = rgb_color
+        composite_img[pxr1-hl_h_margin:pxr2 + hl_h_margin,
+                      pxc1-hl_w_margin:pxc1] = rgb_color
+        composite_img[pxr1-hl_h_margin:pxr2 + hl_h_margin,
+                      pxc2:pxc2+hl_w_margin] = rgb_color
 
       img_de_idx += 1
       de_idx += 1
 
     tile_imgs.append(composite_img)
 
-  return tile_imgs, display_range
+  return tile_imgs, imshow_to_raw_mapping
 
 
-def display_codes(codes, plot_title=""):
+def display_codes(codes, indv_stem_plots=True,
+                  input_and_recon=None, plot_title=""):
   """
-  Plot each of codes separately as a stem plot
+  Visualizes tranform codes
 
   Parameters
   ----------
-  codes : ndarray(float32, size=(B, s))
-      The codes for a batch of size B. B shouldn't be too large unless you want
-      to wait around all day for this to finish.
+  codes : ndarray(float32, size=(b, s) OR size=(b, s, sh, sw)
+      The codes for a batch of size b. b shouldn't be too large unless you want
+      to wait around all day for this to finish. If this is 4-dimensional
+      it means that there is some 2d layout to each code. Each code element
+      can be interpreted as a channel in an image
+  indv_stem_plots : bool, optional
+      Use an individual stem plot for each code. The alternative is to just
+      pack these into an image and display in greyscale. Default True
+  input_and_recon : dictionary
+      Input and reconstruction pairs to display alongside the code, to give a
+      sense for what the code represents, and how well it does this.
+      'input' : ndarray(float32, size=(b, f) OR (b, h, w), OR (b, h, w, c))
+        The input. Just display as-is -- could be flat but most likely is an
+        image patch.
+      'recon' : ndarray(same dims as 'input')
+        The corresponding reconstruction from the transform code
+      'vrange' : the imshow value range on which to display these.
   plot_title : str, optional
       The title of the plot. Default ""
 
@@ -238,9 +328,14 @@ def display_codes(codes, plot_title=""):
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
+  # TODO: get this set up for convolutional codes
   num_codes = codes.shape[0]
   code_size = codes.shape[1]
-  max_data_pt_per_fig = 40
+  if indv_stem_plots:
+    max_data_pt_per_fig = 25
+    code_inds = np.arange(code_size)
+  else:
+    max_data_pt_per_fig = 1000
   num_code_figs = int(np.ceil(num_codes / max_data_pt_per_fig))
   if num_code_figs > 1:
     data_pt_per_fig = max_data_pt_per_fig
@@ -250,40 +345,110 @@ def display_codes(codes, plot_title=""):
   dpt_idx = 0
   code_figs = []
   for in_code_fig_idx in range(num_code_figs):
-    fig, ax = plt.subplots(data_pt_per_fig, 1, figsize=(10, num_codes/1.5))
+    if indv_stem_plots:
+      fig = plt.figure(figsize=(10, 10))
+      if input_and_recon is not None:
+        gridspec = fig.add_gridspec(ncols=3, nrows=data_pt_per_fig,
+            width_ratios=[20, 1, 1], height_ratios=[1]*data_pt_per_fig,
+            hspace=0.1, wspace=0.1)
+      else:
+        gridspec = fig.add_gridspec(ncols=1, nrows=data_pt_per_fig,
+            width_ratios=[1], height_ratios=[1]*data_pt_per_fig, hspace=1)
+    else:
+      fig = plt.figure(figsize=(12, 10))
+      code_img = np.zeros([data_pt_per_fig, code_size])
+      code_img_normalized = np.zeros([data_pt_per_fig, code_size])
     fig.suptitle(plot_title + ', fig {} of {}'.format(
                  in_code_fig_idx+1, num_code_figs), fontsize=15)
     fig_dpt_idx = dpt_idx % data_pt_per_fig
     while fig_dpt_idx < data_pt_per_fig and dpt_idx < num_codes:
-      if dpt_idx % 25 == 0:
-        print('plotted', dpt_idx, 'of', num_codes, 'codes')
-      _, linerefs, _ = ax[fig_dpt_idx].stem(np.arange(code_size),
-          codes[dpt_idx, :], linefmt='-', markerfmt=' ',
-          use_line_collection=True)
-      plt.setp(linerefs, 'color', tab10colors[0])
-      ax[fig_dpt_idx].text(0.1, 0.5, 'L0: {:.2f}, L1: {:.1f}'.format(
-        np.sum(codes[dpt_idx, :] != 0) / code_size,
-        np.sum(np.abs(codes[dpt_idx, :]))))
+      if indv_stem_plots:
+        if dpt_idx % 50 == 0:
+          print('plotted', dpt_idx, 'of', num_codes, 'codes')
+        ax = fig.add_subplot(gridspec[fig_dpt_idx, 0])
+        markerlines, stemlines, baseline = ax.stem(code_inds,
+            codes[dpt_idx, :], linefmt='-', markerfmt=' ',
+            use_line_collection=True)
+        plt.setp(stemlines, 'color', tab10colors[0])
+        plt.setp(baseline, 'color', 'k')
+        plt.setp(baseline, 'linewidth', 0.25)
+        ax.text(0.01, 0.75, 'L0: {:.2f}, L1: {:.1f}'.format(
+          np.sum(codes[dpt_idx, :] != 0) / code_size,
+          np.sum(np.abs(codes[dpt_idx, :]))), fontsize=6,
+          transform=ax.transAxes, color='g')
+        if fig_dpt_idx < data_pt_per_fig - 1:
+          ax.set_xticks([])
+        else:
+          ax.set_xticks([code_size//2, code_size-1])
+        ax.tick_params(axis='y', which='major', labelsize=5)
+        ax.tick_params(axis='y', which='minor', labelsize=4)
+        ax.yaxis.get_offset_text().set_size(5)
+        ax.tick_params(axis='x', which='major', labelsize=12)
+        ax.tick_params(axis='x', which='minor', labelsize=10)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        ax.set_xlim([-2, code_size+1])
+        if input_and_recon is not None:
+          ax = fig.add_subplot(gridspec[fig_dpt_idx, 1])
+          ax.imshow(input_and_recon['input'][dpt_idx], cmap='gray',
+                    vmin=input_and_recon['vrange'][0],
+                    vmax=input_and_recon['vrange'][1])
+          ax.axis('off')
+          if fig_dpt_idx == 0:
+            ax.set_title('In', fontsize=8)
+          ax = fig.add_subplot(gridspec[fig_dpt_idx, 2])
+          ax.imshow(input_and_recon['recon'][dpt_idx], cmap='gray',
+                    vmin=input_and_recon['vrange'][0],
+                    vmax=input_and_recon['vrange'][1])
+          ax.text(1.0, 0.1, '{:.1f}dB'.format(compute_pSNR(
+            input_and_recon['input'][dpt_idx],
+            input_and_recon['recon'][dpt_idx],
+            manual_sig_mag=input_and_recon['vrange'][1]-
+                           input_and_recon['vrange'][0])),
+            color='w', fontsize=5, transform=ax.transAxes,
+            horizontalalignment='right')
+          ax.axis('off')
+          if fig_dpt_idx == 0:
+            ax.set_title('Rec', fontsize=8)
+      else:
+        code_img[fig_dpt_idx] = codes[dpt_idx]
+        max_code_mag = np.max(np.abs(codes[dpt_idx]))
+        if max_code_mag != 0:
+          code_img_normalized[fig_dpt_idx] = codes[dpt_idx] / max_code_mag
+
       fig_dpt_idx += 1
       dpt_idx += 1
+    if not indv_stem_plots:
+      ax = fig.add_subplot(1, 2, 1)
+      ax.imshow(code_img, cmap='gray', interpolation='None')
+      ax.set_aspect('auto')
+      ax = fig.add_subplot(1, 2, 2)
+      ax.imshow(code_img_normalized, cmap='gray', interpolation='None')
+      ax.set_aspect('auto')
     code_figs.append(fig)
 
   return code_figs
 
 
-def display_code_marginal_densities(codes, num_hist_bins,
-    lines=True, overlaid=False, plot_title=""):
+def display_code_marginal_densities(codes, num_hist_bins, log_prob=False,
+    ignore_vals=[], lines=True, overlaid=False, plot_title=""):
   """
-  Estimate the marginal density of the coefficients of a code over some dataset
+  Estimates the marginal density of coefficients of a code over some dataset
 
   Parameters
   ----------
   codes : ndarray(float32, size=(D, s))
-      The codes for a dataset of size D. These are the vectors x for each sample
-      from the dataset. The value s is the dimensionality of the code
+      The codes for a dataset of size D. These are the vectors x for each
+      sample from the dataset. The value s is the dimensionality of the code
   num_hist_bins : int
       The number of bins to use when we make a histogram estimate of the
       empirical density.
+  log_prob : bool, optional
+      Display probabilities on a logarithmic scale. Useful for most sparse
+      codes. Default False.
+  ignore_vals : list, optional
+      A list of code values to ignore from the estimate. Default []. TODO:
+      make this more flexible so this can ignore values in a certain range.
   lines : bool, optional
       If true, plot the binned counts using a line rather than bars. This
       can make it a lot easier to compare multiple datasets at once but
@@ -302,6 +467,17 @@ def display_code_marginal_densities(codes, num_hist_bins,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
+  def filter_code_vals(scalar_code_vals):
+    if len(ignore_vals) > 0:
+      keep_these_inds = scalar_code_vals != ignore_vals[0]
+      for i in range(1, len(ignore_vals)):
+        keep_these_inds = np.logical_and(keep_these_inds,
+                                         scalar_code_vals != ignore_vals[i])
+      return scalar_code_vals[keep_these_inds]
+    else:
+      return scalar_code_vals
+
+  # TODO: get this going for convolutional codes
   if overlaid:
     # there's just a single plot
     fig = plt.figure(figsize=(15, 15))
@@ -317,7 +493,8 @@ def display_code_marginal_densities(codes, num_hist_bins,
     histogram_bin_centers = (histogram_bin_edges[:-1] +
                              histogram_bin_edges[1:]) / 2
     for de_idx in range(codes.shape[1]):
-      counts, _ = np.histogram(codes[:, de_idx], histogram_bin_edges)
+      code = filter_code_vals(codes[:, de_idx])
+      counts, _ = np.histogram(code, histogram_bin_edges)
       empirical_density = counts / np.sum(counts)
       if lines:
         ax.plot(histogram_bin_centers, empirical_density,
@@ -329,11 +506,13 @@ def display_code_marginal_densities(codes, num_hist_bins,
                width=histogram_bin_centers[1]-histogram_bin_centers[0],
                alpha=0.4, label='Coeff idx ' + str(de_idx))
     ax.legend(fontsize=10)
+    if log_prob:
+      ax.set_yscale('log')
     de_figs = [fig]
 
   else:
     # every coefficient gets its own subplot
-    max_de_per_fig = 80*80  # max 80x80 {d}ictionary {e}lements displayed each fig
+    max_de_per_fig = 20*20  # max 20x20 {d}ictionary {e}lements displayed
     assert np.sqrt(max_de_per_fig) % 1 == 0, 'please pick a square number'
     num_de = codes.shape[1]
     num_de_figs = int(np.ceil(num_de / max_de_per_fig))
@@ -345,7 +524,6 @@ def display_code_marginal_densities(codes, num_hist_bins,
       squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_fig))+1)]
       de_per_fig = squares[bisect.bisect_left(squares, num_de)]
     plot_sidelength = int(np.sqrt(de_per_fig))
-
 
     de_idx = 0
     de_figs = []
@@ -361,16 +539,17 @@ def display_code_marginal_densities(codes, num_hist_bins,
         if de_idx % 100 == 0:
           print('plotted', de_idx, 'of', num_de, 'code coefficients')
         ax = plt.Subplot(fig, subplot_grid[fig_de_idx])
-        histogram_min = min(codes[:, de_idx])
-        histogram_max = max(codes[:, de_idx])
+        code = filter_code_vals(codes[:, de_idx])
+        histogram_min = min(code)
+        histogram_max = max(code)
         histogram_bin_edges = np.linspace(histogram_min, histogram_max,
                                           num_hist_bins + 1)
         histogram_bin_centers = (histogram_bin_edges[:-1] +
                                  histogram_bin_edges[1:]) / 2
-        counts, _ = np.histogram(codes[:, de_idx], histogram_bin_edges)
+        counts, _ = np.histogram(code, histogram_bin_edges)
         empirical_density = counts / np.sum(counts)
         max_density = np.max(empirical_density)
-        variance = np.var(codes[:, de_idx])
+        variance = np.var(code)
         hist_kurtosis = kurtosis(empirical_density, fisher=False)
 
         if lines:
@@ -385,18 +564,21 @@ def display_code_marginal_densities(codes, num_hist_bins,
         ax.xaxis.set_major_formatter(FormatStrFormatter('%0.1f'))
         ax.tick_params(axis='both', which='major',
                        labelsize=5)
-        ax.set_xticks([histogram_min, 0., histogram_max])
+        if histogram_min < 0.:
+          ax.set_xticks([histogram_min, 0., histogram_max])
+        else:
+          ax.set_xticks([histogram_min, histogram_max])
+        ax.text(0.1, 0.75, 'K: {:.1f}'.format(
+          hist_kurtosis), transform=ax.transAxes,
+          color='g', fontsize=5)
+        ax.text(0.95, 0.75, 'V: {:.1f}'.format(
+          variance), transform=ax.transAxes,
+          color='b', fontsize=5, horizontalalignment='right')
         ax.set_yticks([0., max_density])
         ax.spines['right'].set_visible(False)
         ax.spines['top'].set_visible(False)
-        # ax.set_yscale('log')
-
-        ax.text(0.1, 0.97, '{:.2f}'.format(variance), horizontalalignment='left',
-                verticalalignment='top', transform=ax.transAxes, color='b',
-                fontsize=5)
-        ax.text(0.1, 0.8, '{:.2f}'.format(hist_kurtosis),
-                horizontalalignment='left', verticalalignment='top',
-                transform=ax.transAxes, color='r', fontsize=5)
+        if log_prob:
+          ax.set_yscale('log')
 
         fig.add_subplot(ax)
         fig_de_idx += 1
@@ -406,240 +588,96 @@ def display_code_marginal_densities(codes, num_hist_bins,
   return de_figs
 
 
-class TrainingLivePlot(object):
+def display_2d_code_densities(two_codes, num_hist_bins,
+    log_prob=False, with_contours=True, ignore_vals=[], plot_title=""):
   """
-  A container for matplotlib plots we'll use to visualize training progress
+  Displays the empirical joint probability density between two elements
 
   Parameters
   ----------
-  dict_plot_params : dictionary
-      Parameters of the dictionary plot. Currently
-      'total_num' : int, 'img_height' : int, 'img_width' : int,
-      'plot_width' : int, 'plot_height' : int, 'renorm imgs' : bool,
-      'display_ordered' : bool
-  code_plot_params : dictionary, optional
-      Parameters of the code plot. Currently just 'size' : int
+  two_codes : ndarray(size=(D, 2))
+      D samples of two code elements.
+  num_hist_bins : int
+      The number of histogram bins used for the estimate
+  log_prob : bool, optional
+      Display with log transformation to the probability. Makes is easier to
+      see if there is a high probability mode dominating the values. Will be
+      renormalized so that 0.0 is the lowest probability and 1.0 is the
+      highest probability. Default False.
+  with_contours : bool, optional
+      Overlay equal-probability contours using pyplot's contour() method.
+      Default True.
+  ignore_vals : list, optional
+      A list of code values to ignore from the estimate. Default []. TODO:
+      make this more flexible so this can ignore values in a certain range.
+  plot_title : str, optional
+      An identifying title for this plot. Default ""
+
+  Returns
+  ----------
+  joint_2d_fig : pyplot.Figure
+      A figure that can be saved or whatever in the calling scope
   """
-  def __init__(self, dict_plot_params, code_plot_params=None,
-               other_plot_params=None):
-
-    plt.ion()
-
-    #################
-    # Dictionary plot
-    #################
-    self.dict_plot_height = dict_plot_params['plot_height']
-    self.dict_plot_width = dict_plot_params['plot_width']
-    self.img_height = dict_plot_params['img_height']
-    self.img_width = dict_plot_params['img_width']
-    if dict_plot_params['display_ordered']:
-      self.dict_inds = np.arange(self.dict_plot_height*self.dict_plot_width)
+  #TODO: get this working with convolutional codes
+  def filter_code_vals(td_code_vals):
+    if len(ignore_vals) > 0:
+      keep_these_inds = np.logical_and(td_code_vals[:, 0] != ignore_vals[0],
+                                       td_code_vals[:, 1] != ignore_vals[0])
+      for i in range(1, len(ignore_vals)):
+        keep_these_inds = np.logical_and(keep_these_inds,
+            np.logical_and(td_code_vals[:, 0] != ignore_vals[i],
+                           td_code_vals[:, 1] != ignore_vals[i]))
+      return td_code_vals[keep_these_inds]
     else:
-      self.dict_inds = np.random.choice(
-          np.arange(dict_plot_params['total_num']),
-          self.dict_plot_height*self.dict_plot_width, replace=False)
-    self.dict_renorm_flag = dict_plot_params['renorm imgs']
-    # prepare a single image to display
-    self.dict_h_margin = 2
-    self.dict_w_margin = 2
-    full_img_height = (self.img_height * self.dict_plot_height +
-                       (self.dict_plot_height - 1) * self.dict_h_margin)
-    full_img_width = (self.img_width * self.dict_plot_width +
-                       (self.dict_plot_width - 1) * self.dict_w_margin)
-    composite_img = np.ones((full_img_height, full_img_width))
-    for plot_idx in range(len(self.dict_inds)):
-      row_idx = plot_idx // self.dict_plot_width
-      col_idx = plot_idx % self.dict_plot_width
-      pxr1 = row_idx * (self.img_height + self.dict_h_margin)
-      pxr2 = pxr1 + self.img_height
-      pxc1 = col_idx * (self.img_width + self.dict_w_margin)
-      pxc2 = pxc1 + self.img_width
-      composite_img[pxr1:pxr2, pxc1:pxc2] = np.zeros(
-          (self.img_height, self.img_width))
+      return td_code_vals
 
-    self.dict_fig, self.dict_ax = plt.subplots(1, 1, figsize=(10, 10))
-    self.dict_fig.suptitle('Random sample of current dictionary', fontsize=15)
-    self.temp_imshow_ref = self.dict_ax.imshow(composite_img, cmap='Greys_r')
-    self.dict_ax.axis('off')
+  def gen_gaussian_levels(min_l, max_l, num_l, log_probability=False):
+    """Generates levels that are equally-spaced under a 2d gaussian"""
+    if not log_probability:
+      temp = np.geomspace(1, 2, num=num_l)  # log spacing
+    else:
+      temp = np.linspace(1, 2, num=num_l)
+    temp /= np.sqrt(temp)  # now will be even in the square
+    temp -= np.min(temp)
+    temp *= ((max_l-min_l) / np.max(temp)) # make the range
+    temp += min_l
+    return temp
 
-    self.requires = ['dictionary']
-
-    ###########
-    # Code plot
-    ###########
-    if code_plot_params is not None:
-      # set up the code plot
-      self.code_size = code_plot_params['size']
-      self.num_disp = code_plot_params['num_displayed']
-      self.code_fig, self.code_ax = plt.subplots(self.num_disp, 1,
-          figsize=(10, self.num_disp/1.5))
-      self.code_fig.suptitle('Random sample of codes', fontsize=12)
-      self.lineplot_refs = []
-      for c_idx in range(self.num_disp):
-        _, linerefs, _ = self.code_ax[c_idx].stem(np.arange(self.code_size),
-            np.zeros(self.code_size), linefmt='-', markerfmt=' ',
-            use_line_collection=False)
-        plt.setp(linerefs, 'color', tab10colors[0])
-        self.lineplot_refs.append(linerefs)
-      self.requires.append('codes')
-
-    ##########################
-    # Objective function plots
-    ##########################
-    self.metrics_fig, self.metrics_ax = plt.subplots(1, 3, figsize=(20, 5))
-    # self.sparsity_fig, self.l1_ax = plt.subplots(1, 1, figsize=(10, 5))
-    self.recon_sq_err_ax = self.metrics_ax[0]
-    self.l1_ax = self.metrics_ax[1]
-    self.bpdn_loss_ax = self.metrics_ax[2]
-    self.recon_psnr_ax = self.recon_sq_err_ax.twinx()
-    self.l0_ax = self.l1_ax.twinx()
-    self.recon_sq_err_ref = Line2D([], [], color='k', linewidth=3)
-    self.recon_sq_err_saved = []
-    self.recon_psnr_ref = Line2D([], [], color='m', linewidth=3)
-    self.recon_psnr_saved = []
-    self.l1_ref = Line2D([], [], color='b', linewidth=3)
-    self.l1_saved = []
-    self.l0_ref = Line2D([], [], color='g', linewidth=3)
-    self.l0_saved = []
-    self.bpdn_loss_ref = Line2D([], [], color='k', linewidth=3)
-    self.bpdn_loss_saved = []
-
-    self.recon_sq_err_ax.add_line(self.recon_sq_err_ref)
-    self.recon_psnr_ax.add_line(self.recon_psnr_ref)
-    self.l1_ax.add_line(self.l1_ref)
-    self.l0_ax.add_line(self.l0_ref)
-    self.bpdn_loss_ax.add_line(self.bpdn_loss_ref)
-    self.sparsity_weight = (1.0 if other_plot_params is None
-                            else other_plot_params['sparsity_weight'])
-
-    self.recon_sq_err_min = 0.0
-    self.recon_sq_err_max = 100.0
-    self.recon_sq_err_ax.set_ylim(self.recon_sq_err_min, self.recon_sq_err_max)
-    self.recon_sq_err_ax.set_xlim(0, 100)
-    self.recon_sq_err_ax.set_yscale('log')
-    self.recon_sq_err_ax.set_ylabel('log(Squared error of reconstructions)', fontsize=10)
-    self.recon_sq_err_ax.yaxis.label.set_color('k')
-    self.recon_sq_err_ax.set_xlabel('Liveplot visualization iter', fontsize=10)
-
-    self.recon_psnr_min = -10.0
-    self.recon_psnr_max = 50.0
-    self.recon_psnr_ax.set_ylim(self.recon_psnr_min, self.recon_psnr_max)
-    self.recon_psnr_ax.set_xlim(0, 100)
-    self.recon_psnr_ax.set_ylabel('pSNR of reconstructions (dB)', fontsize=10)
-    self.recon_psnr_ax.yaxis.label.set_color('m')
-
-    self.l1_min = 0.0
-    self.l1_max = 100
-    self.l1_ax.set_ylim(self.l1_min, self.l1_max)
-    self.l1_ax.set_xlim(0, 100)
-    self.l1_ax.set_ylabel('log(L1)', fontsize=10)
-    self.l1_ax.set_xlabel('Liveplot visualization iter', fontsize=10)
-    self.l1_ax.set_yscale('log')
-    self.l1_ax.yaxis.label.set_color('b')
-    self.l0_min = 0.0
-    self.l0_max = 100
-    self.l0_ax.set_ylim(self.l0_min, self.l0_max)
-    self.l0_ax.set_ylabel('L0', fontsize=10)
-    self.l0_ax.yaxis.label.set_color('g')
-
-    self.bpdn_min = 0.0
-    self.bpdn_max = 1000
-    self.bpdn_loss_ax.set_ylim(self.bpdn_min, self.bpdn_max)
-    self.bpdn_loss_ax.set_xlim(0, 100)
-    # self.bpdn_loss_ax.set_yscale('log')
-    self.bpdn_loss_ax.set_ylabel('log(BPDN loss)', fontsize=10)
-    self.bpdn_loss_ax.set_xlabel('Liveplot visualization iter', fontsize=10)
-    self.bpdn_loss_ax.yaxis.label.set_color('k')
-    self.requires.append('dictionary_codes_and_patches')
-
-  def Requires(self):
-    return self.requires
-
-  def ClosePlot(self):
-    plt.close()
-
-  def UpdatePlot(self, data, which_plot):
-
-    if which_plot == 'dictionary':
-      full_img_height = (self.img_height * self.dict_plot_height +
-                         (self.dict_plot_height - 1) * self.dict_h_margin)
-      full_img_width = (self.img_width * self.dict_plot_width +
-                         (self.dict_plot_width - 1) * self.dict_w_margin)
-      if self.dict_renorm_flag:
-        maximum_value = 1.0
-      else:
-        maximum_value = np.max(data[:, self.dict_inds])
-
-      composite_img = maximum_value * np.ones((full_img_height, full_img_width))
-      for plot_idx in range(len(self.dict_inds)):
-        if self.dict_renorm_flag:
-          this_filter = data[:, self.dict_inds[plot_idx]]
-          this_filter = this_filter - np.min(this_filter)
-          this_filter = this_filter / np.max(this_filter)  # now in [0, 1]
-        else:
-          this_filter = np.copy(data[:, self.dict_inds[plot_idx]])
-
-        row_idx = plot_idx // self.dict_plot_width
-        col_idx = plot_idx % self.dict_plot_width
-        pxr1 = row_idx * (self.img_height + self.dict_h_margin)
-        pxr2 = pxr1 + self.img_height
-        pxc1 = col_idx * (self.img_width + self.dict_w_margin)
-        pxc2 = pxc1 + self.img_width
-        composite_img[pxr1:pxr2, pxc1:pxc2] = np.reshape(
-            this_filter, (self.img_height, self.img_width))
-
-      self.dict_ax.clear()
-      self.dict_ax.imshow(composite_img, cmap='Greys_r')
-      self.dict_ax.axis('off')
-      plt.pause(0.1)
-
-    elif which_plot == 'codes':
-      assert data.shape[1] >= self.num_disp
-      rand_inds = np.random.choice(np.arange(data.shape[1]), self.num_disp,
-                                   replace=False)
-      for d_idx in range(self.num_disp):
-        min_code_val = np.min(data[:, rand_inds[d_idx]])
-        max_code_val = np.max(data[:, rand_inds[d_idx]])
-        for l_idx in range(self.code_size):
-          self.lineplot_refs[d_idx][l_idx].set_ydata(
-              [0.0, data[l_idx, rand_inds[d_idx]]])
-        self.code_ax[d_idx].set_ylim(min_code_val, max_code_val)
-      plt.pause(0.1)
-
-    elif which_plot == 'dictionary_codes_and_patches':
-      temp = np.dot(data['dictionary'], data['codes'])
-      self.recon_sq_err_saved.append(0.5*np.mean(np.square(data['patches'] - temp)))
-      self.recon_psnr_saved.append(compute_pSNR(data['patches'], temp))
-      self.l1_saved.append(np.mean(np.sum(np.abs(data['codes']), axis=-1)))
-      self.l0_saved.append(np.mean(np.sum(data['codes'] != 0.0, axis=0)))
-      self.bpdn_loss_saved.append(self.recon_sq_err_saved[-1] +
-                                  self.sparsity_weight * self.l1_saved[-1])
-      self.recon_sq_err_ref.set_data(np.arange(len(self.recon_sq_err_saved)),
-                                     self.recon_sq_err_saved)
-      self.recon_psnr_ref.set_data(np.arange(len(self.recon_psnr_saved)),
-                                   self.recon_psnr_saved)
-      self.l1_ref.set_data(np.arange(len(self.l1_saved)), self.l1_saved)
-      self.l0_ref.set_data(np.arange(len(self.l0_saved)), self.l0_saved)
-      self.bpdn_loss_ref.set_data(np.arange(len(self.bpdn_loss_saved)),
-                                  self.bpdn_loss_saved)
-      self.recon_sq_err_min = min(self.recon_sq_err_saved)
-      self.recon_sq_err_max = max(self.recon_sq_err_saved)
-      self.recon_psnr_min = min(self.recon_psnr_saved)
-      self.recon_psnr_max = max(self.recon_psnr_saved)
-      self.l1_min = min(self.l1_saved)
-      self.l1_max = max(self.l1_saved)
-      self.l0_min = min(self.l0_saved)
-      self.l0_max = max(self.l0_saved)
-      self.bpdn_min = min(self.bpdn_loss_saved)
-      self.bpdn_max = max(self.bpdn_loss_saved)
-      self.recon_sq_err_ax.set_ylim(self.recon_sq_err_min, self.recon_sq_err_max)
-      self.recon_psnr_ax.set_ylim(self.recon_psnr_min, self.recon_psnr_max)
-      self.l1_ax.set_ylim(self.l1_min, self.l1_max)
-      self.l0_ax.set_ylim(self.l0_min, self.l0_max)
-      self.bpdn_loss_ax.set_ylim(self.bpdn_min, self.bpdn_max)
-      self.recon_sq_err_ax.set_xlim(0, len(self.recon_sq_err_saved))
-      self.recon_psnr_ax.set_xlim(0, len(self.recon_psnr_saved))
-      self.l1_ax.set_xlim(0, len(self.l1_saved))
-      self.l0_ax.set_xlim(0, len(self.l0_saved))
-      self.bpdn_loss_ax.set_xlim(0, len(self.bpdn_loss_saved))
-      plt.pause(0.1)
+  assert two_codes.shape[1] == 2  # for now just visualize 2d RVs
+  blues = plt.get_cmap('Blues')
+  fig = plt.figure(figsize=(10, 10))
+  fig.suptitle(plot_title, fontsize=14)
+  two_codes = filter_code_vals(two_codes)
+  empirical_density, x_bin_edges, y_bin_edges = np.histogram2d(
+      x=two_codes[:, 0], y=two_codes[:, 1], bins=num_hist_bins,
+      density=True)
+  empirical_density = empirical_density.T  # indexing convention
+  x_bin_centers = (x_bin_edges[:-1] + x_bin_edges[1:]) / 2
+  y_bin_centers = (y_bin_edges[:-1] + y_bin_edges[1:]) / 2
+  min_min = min(x_bin_edges[0], y_bin_edges[0])
+  max_max = max(x_bin_edges[-1], y_bin_edges[-1])
+  if log_prob:
+    nonzero_inds = empirical_density != 0
+    empirical_density[nonzero_inds] = np.log(empirical_density[nonzero_inds])
+    empirical_density[nonzero_inds] -= np.min(empirical_density[nonzero_inds])
+    empirical_density[nonzero_inds] /= np.max(empirical_density[nonzero_inds])
+    max_emp_prob = np.max(empirical_density)
+    gaussian_levels = gen_gaussian_levels(
+        0.25*max_emp_prob, 0.9*max_emp_prob, 5, log_probability=True)
+  else:
+    max_emp_prob = np.max(empirical_density)
+    gaussian_levels = gen_gaussian_levels(
+        0.25*max_emp_prob, 0.9*max_emp_prob, 5, log_probability=False)
+  ax = fig.add_subplot(111, xlim=[min_min, max_max], ylim=[min_min, max_max])
+  im = NonUniformImage(ax, interpolation='nearest', cmap='Blues')
+  im.set_data(x_bin_centers, y_bin_centers, empirical_density)
+  ax.images.append(im)
+  if with_contours:
+    y_coords, x_coords = np.meshgrid(y_bin_centers,
+                                     x_bin_centers, indexing='ij')
+    ax.contour(x_coords, y_coords, empirical_density,
+               levels=gaussian_levels, colors='k')
+  ax.set_title('Joint (log) density', fontsize=10)
+  ax.set_ylabel('Values for coefficient 1', fontsize=10)
+  ax.set_xlabel('Values for coefficient 0', fontsize=10)
+  return fig

@@ -62,23 +62,25 @@ def main():
   # patches and then we can go back and reassemble the image.
   print('Computing ZCA transform...')
   print('Creating a dataset of patches')
+  zca_patch_dims = (8, 8)
   one_mil_image_patches = dset_generation.create_patch_training_set(
-      num_batches=1, batch_size=1000000, patch_dimensions=(8, 8),
+      num_batches=1, batch_size=1000000, patch_dimensions=zca_patch_dims,
       edge_buffer=5, dataset='Kodak_BW',
       order_of_preproc_ops=['patch'])['batched_patches'][0]
   _, ZCA_params = im_proc.whiten_ZCA(one_mil_image_patches)
   print('Applying transform to test image')
   orig_img_patches, orig_img_patch_pos = im_proc.patches_from_single_image(
-      orig_img, (8, 8), flatten_patches=True)
+      orig_img, zca_patch_dims, flatten_patches=True)
   white_patches = im_proc.whiten_ZCA(orig_img_patches, ZCA_params)
   white_img = im_proc.assemble_image_from_patches(
-      white_patches, (8, 8), orig_img_patch_pos)
+      white_patches, zca_patch_dims, orig_img_patch_pos)
   orig_img_recovered_patches = im_proc.unwhiten_ZCA(white_patches, ZCA_params)
   orig_img_recovered = im_proc.assemble_image_from_patches(
-      orig_img_recovered_patches, (8, 8), orig_img_patch_pos)
+      orig_img_recovered_patches, zca_patch_dims, orig_img_patch_pos)
   # A little visualization
   visualize_ZCA_whitening(np.squeeze(orig_img), np.squeeze(white_img),
-                          ZCA_params, np.squeeze(orig_img_recovered))
+                          ZCA_params, np.squeeze(orig_img_recovered),
+                          zca_patch_dims)
 
 
   ##############################
@@ -104,39 +106,39 @@ def main():
                 g_sigma_freq)
 
 
-  # ######################################
-  # # This is the type of preprocessing
-  # # I currently recommend for sparse
-  # # coding in the context of compression
-  # ######################################
-  # # The idea is to pass low-frequencies THROUGH the whitening filter and
-  # # subtract them out with local luminance subtraction -- we can tune the
-  # # whitening filter's passband so that it all gets sucked up by the
-  # # second stage:
-  # gfilt_sigma_sd = 8  # a gaussian filter with a standard deviation of 8 pix
-  # wf_cutoff_high = 0.9
-  # lp_cutoff_attenuation_factor = 100  # calc. freq where power atten. by 100
-  # gfilt_sigma_fd = 1. / (2 * np.pi * gfilt_sigma_sd)  # in frequency domain
-  # wf_cutoff_low = (np.sqrt(2 * np.log(np.sqrt(lp_cutoff_attenuation_factor))) *
-  #                  gfilt_sigma_fd)
-  # dft_num_samples = orig_img.shape[:2]
-  # white_img, white_filt = im_proc.whiten_center_surround(
-  #     orig_img, cutoffs={'low': wf_cutoff_low, 'high': wf_cutoff_high},
-  #     norm_and_threshold=False, return_filter=True)
-  # white_centered_img, wc_subtractor = im_proc.local_luminance_subtraction(
-  #     white_img, gfilt_sigma_sd, return_subtractor=True)
-  # white_img_recovered = white_centered_img + wc_subtractor
-  # # when we do sparse coding there will be noise that we don't want to
-  # # accentuate. Therefore, rather than do exact unwhitening, we don't unwhiten
-  # # the low frequencies.
-  # orig_img_recovered = im_proc.unwhiten_center_surround(
-  #     white_img_recovered, low_cutoff=wf_cutoff_low)
-  # visualize_lls(np.squeeze(white_img), np.squeeze(white_centered_img),
-  #               np.squeeze(wc_subtractor), np.squeeze(white_img_recovered),
-  #               g_sigma=gfilt_sigma_fd)
-  # visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
-  #                        white_filt, np.squeeze(orig_img_recovered),
-  #                        dft_num_samples)
+  ######################################
+  # This is the type of preprocessing
+  # I currently recommend for sparse
+  # coding in the context of compression
+  ######################################
+  # The idea is to pass low-frequencies THROUGH the whitening filter and
+  # subtract them out with local luminance subtraction -- we can tune the
+  # whitening filter's passband so that it all gets sucked up by the
+  # second stage:
+  gfilt_sigma_sd = 8  # a gaussian filter with a standard deviation of 8 pix
+  wf_cutoff_high = 0.9
+  lp_cutoff_attenuation_factor = 100  # calc. freq where power atten. by 100
+  gfilt_sigma_fd = 1. / (2 * np.pi * gfilt_sigma_sd)  # in frequency domain
+  wf_cutoff_low = (np.sqrt(2 * np.log(np.sqrt(lp_cutoff_attenuation_factor))) *
+                   gfilt_sigma_fd)
+  dft_num_samples = orig_img.shape[:2]
+  white_img, white_filt = im_proc.whiten_center_surround(
+      orig_img, cutoffs={'low': wf_cutoff_low, 'high': wf_cutoff_high},
+      norm_and_threshold=False, return_filter=True)
+  white_centered_img, wc_subtractor = im_proc.local_luminance_subtraction(
+      white_img, gfilt_sigma_sd, return_subtractor=True)
+  white_img_recovered = white_centered_img + wc_subtractor
+  # when we do sparse coding there will be noise that we don't want to
+  # accentuate. Therefore, rather than do exact unwhitening, we don't unwhiten
+  # the low frequencies.
+  orig_img_recovered = im_proc.unwhiten_center_surround(
+      white_img_recovered, low_cutoff=wf_cutoff_low)
+  visualize_lls(np.squeeze(white_img), np.squeeze(white_centered_img),
+                np.squeeze(wc_subtractor), np.squeeze(white_img_recovered),
+                g_sigma=gfilt_sigma_fd)
+  visualize_AR_whitening(np.squeeze(orig_img), np.squeeze(white_img),
+                         white_filt, np.squeeze(orig_img_recovered),
+                         dft_num_samples)
 
   plt.show()
 
@@ -495,7 +497,7 @@ def visualize_AR_whitening(o_img, w_img, w_filt, o_img_recovered, dft_nsamps):
   plt.tight_layout()
 
 
-def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
+def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered, patch_dims):
   fig = plt.figure(figsize=(15, 8), dpi=100)
   fig.suptitle('ZCA whitening', fontsize=12)
   sp_colwidths = [1, 1, 1, 1]
@@ -553,7 +555,7 @@ def visualize_ZCA_whitening(o_img, w_img, ZCA, o_img_recovered):
 
   ax = fig.add_subplot(gridspec[1, 2])
   p_basis_img = plot_utils.get_dictionary_tile_imgs(
-      ZCA['PCA_basis'].T, reshape_to_these_dims=(8, 8))
+      ZCA['PCA_basis'].T, reshape_to_these_dims=patch_dims)
   plt.title('PCA basis used', fontsize=12)
   plt.imshow(np.squeeze(p_basis_img[0]), cmap='Greys_r')
   plt.axis('off')

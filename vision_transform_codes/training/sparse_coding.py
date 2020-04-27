@@ -171,6 +171,9 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       if psnr != np.inf:
         recon_psnr.append(psnr)
     metrics['Average pSNR of reconstructions'] = np.mean(recon_psnr)
+    metrics['Average change in dictionary kernels'] = torch.mean(
+        torch.abs(dictionary - previous_dictionary),
+        dim=axes_of_summation).cpu().numpy()
     return metrics
 
   def send_metrics_to_tensorboard(dict_of_metrics):
@@ -328,6 +331,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   ##################################
 
   dictionary = init_dictionary  # no copying, just a new reference
+  previous_dictionary = torch.zeros_like(dictionary)
+  previous_dictionary.copy_(dictionary)
 
   starttime = time.time()
   total_iter_idx = 0
@@ -364,6 +369,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       if dictionary.is_cuda and not t_batch_images.is_cuda:
         t_batch_images.cuda()
       t_codes = infer_codes(t_batch_images)
+      previous_dictionary.copy_(dictionary)
       update_dictionary(t_batch_images, t_codes)
 
       total_iter_idx += 1
