@@ -36,4 +36,4 @@ def train_dictionary(image_dataset):
 
   # remember the PCA transform is not completely unique. The defining criteria
   # is *invariant to sign flips of any of the basis vectors
-  return U.float()
+  return U.t()

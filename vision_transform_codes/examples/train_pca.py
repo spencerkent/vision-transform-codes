@@ -10,9 +10,9 @@ import torch
 from training.pca import train_dictionary
 from analysis_transforms.fully_connected import invertible_linear
 from utils.dataset_generation import create_patch_training_set
-from utils.plotting import TrainingLivePlot
 from utils.plotting import display_dictionary
 from utils import defaults
+from utils.plotting import compute_pSNR
 
 RUN_IDENTIFIER = 'test_PCA'
 
@@ -40,9 +40,10 @@ image_patches_gpu = torch.from_numpy(
 
 pca_dictionary = train_dictionary(image_patches_gpu)
 codes = invertible_linear.run(image_patches_gpu, pca_dictionary, orthonormal=True)
+reconstructions = torch.mm(codes, pca_dictionary)
 
-plots = display_dictionary(pca_dictionary.cpu().numpy().T,
-    (16, 16), 'PCA-determined basis functions, w/o renormalization',
-    renormalize=False)
+plots = display_dictionary(pca_dictionary.cpu().numpy(),
+    reshaping=(16, 16),
+    plot_title='PCA-determined basis functions')
 
 plt.show()
