@@ -8,22 +8,24 @@ these should also work well for other datasets too
 """
 import _set_the_path
 
+import math
 import pickle
 import torch
 
 from training.sparse_coding import train_dictionary
 from utils.convolutions import get_padding_amt
-from utils.dataset_generation import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set, OneOutputDset
 from utils import defaults
 
 RUN_IDENTIFIER = 'test_convolutional_sparse_coding'
 LOGS_STORED_HERE = defaults.logging_directory
 
+TRAINING_SET_SIZE = 10000  # 10000 images in an epoch
+VALIDATION_SET_SIZE = 100
 PATCH_HEIGHT = 256
 PATCH_WIDTH = 256
 BATCH_SIZE = 5  # (PATCH_HEIGHT x PATCH_WIDTH) images
-NUM_BATCHES = 2000  # 10000 images in an EPOCH
-VAL_SET_SIZE = 50 # (PATCH_HEIGHT x PATCH_WIDTH) images
+iters_per_epoch = int(math.ceil(TRAINING_SET_SIZE / BATCH_SIZE))
 
 KERNEL_HEIGHT = 16
 KERNEL_WIDTH = 16
@@ -36,7 +38,6 @@ assert KERNEL_HEIGHT % KERNEL_STRIDE_VERT == 0
 
 CODE_SIZE = 64  # The stride makes this critically sampled
 NUM_EPOCHS = 10
-iters_per_epoch = NUM_BATCHES
 
 # Dataset generation/loading
 vert_padding = get_padding_amt(PATCH_HEIGHT, KERNEL_HEIGHT,
@@ -49,14 +50,14 @@ if not LOAD_DATA_FROM_DISK:
   print('Creating training and validation datasets...')
   trn_val_dsets = {
       'training': create_patch_training_set(
-        num_batches=NUM_BATCHES, batch_size=BATCH_SIZE,
+        num_samples=TRAINING_SET_SIZE,
         patch_dimensions=(PATCH_HEIGHT, PATCH_WIDTH), edge_buffer=5,
         dataset='Field_NW', order_of_preproc_ops=[
           'standardize_data_range', 'whiten_center_surround', 'patch'],
         extra_params={'padding': (vert_padding, horz_padding),
                       'flatten_patches': False}),
       'validation': create_patch_training_set(
-        num_batches=1, batch_size=VAL_SET_SIZE,
+        num_samples=VALIDATION_SET_SIZE,
         patch_dimensions=(PATCH_HEIGHT, PATCH_WIDTH), edge_buffer=5,
         dataset='Field_NW', order_of_preproc_ops=[
           'standardize_data_range', 'whiten_center_surround', 'patch'],
@@ -82,8 +83,8 @@ SC_PARAMS = {
     'dictionary_update_algorithm': 'sc_cheap_quadratic_descent',
     'dict_update_param_schedule': {
       0: {'stepsize': 0.005, 'num_iters': 1},
-      5*NUM_BATCHES: {'stepsize': 0.001, 'num_iters': 1},
-      20*NUM_BATCHES: {'stepsize': 0.0001, 'num_iters': 1}},
+      5*iters_per_epoch: {'stepsize': 0.001, 'num_iters': 1},
+      20*iters_per_epoch: {'stepsize': 0.0001, 'num_iters': 1}},
     # write various tensorboard logs on the following schedule:
     'training_visualization_schedule': set([0, 500, 1000, 2000]),
     # actually store all logs here:
@@ -97,14 +98,19 @@ SC_PARAMS['training_visualization_schedule'].update(set(
 
 # Now initialize modela and begin training
 torch_device = torch.device('cuda:1')
-torch.cuda.set_device(1)
 # otherwise can put on 'cuda:0' or 'cpu'
 
-# send ALL image patches to the GPU
-image_patches_gpu_training = torch.from_numpy(
-    trn_val_dsets['training']['batched_patches']).to(torch_device)
-image_patches_gpu_validation = torch.from_numpy(
-    trn_val_dsets['validation']['batched_patches']).to(torch_device)
+# send ALL image patches to the GPU and wrap in a simple dataloader
+image_patches_gpu_training = torch.utils.data.DataLoader(
+    OneOutputDset(torch.from_numpy(
+    trn_val_dsets['training']['patches']).to(torch_device)),
+    batch_size=BATCH_SIZE, shuffle=True)
+image_patches_gpu_validation = torch.utils.data.DataLoader(
+    OneOutputDset(torch.from_numpy(
+    trn_val_dsets['validation']['patches']).to(torch_device)),
+    batch_size=BATCH_SIZE*10)
+# if data is too big to all fit on GPU, just omit .to(torch_device) above.
+# Can also add num_workers=x to the DataLoader constructor
 
 # create the dictionary Tensor on the GPU
 sparse_coding_dictionary = torch.randn(

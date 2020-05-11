@@ -5,13 +5,22 @@ import pickle
 import numpy as np
 import scipy.io
 import h5py
+import torch
 
 from utils import image_processing as ip_util
 from utils import defaults
 
-def create_patch_training_set(
-    num_batches, batch_size, patch_dimensions, edge_buffer, dataset,
-    order_of_preproc_ops, extra_params={}):
+class OneOutputDset(torch.utils.data.Dataset):
+  """Just like torch.utils.data.TensorDataset, but doesn't return a tuple"""
+  def __init__(self, single_tensor):
+    self.tensor = single_tensor
+  def __getitem__(self, index):
+    return self.tensor[index]
+  def __len__(self):
+    return self.tensor.size(0)
+
+def create_patch_training_set(num_samples, patch_dimensions, edge_buffer,
+                              dataset, order_of_preproc_ops, extra_params={}):
   """
   Creates a dataset of image patches.
 
@@ -22,10 +31,9 @@ def create_patch_training_set(
 
   Parameters
   ----------
-  num_batches : int
-      The total number of batches to assemble
-  batch_size : int
-      The number of patches in a batch
+  num_samples : int
+      The total number of samples to draw. Batching is handled separately from
+      this function
   patch_dimensions : tuple(int, int)
       The size in pixels of each patch
   edge_buffer : int
@@ -60,11 +68,12 @@ def create_patch_training_set(
   Returns
   -------
   return_dict : dictionary
-    'batched_patches' : ndarray(float32, size=(k, b, n) OR (k, b, pc, ph, pw))
+    'patches' : ndarray(float32, size=(d, n) OR (d, pc, ph, pw))
         The patches training set where pc=number of color channels in a patch,
-        ph=patch_dimensions[0], pw=patch_dimensions[1], k=num_batches,
-        b=batch_size, and n=pc*ph*pw. These are patches ready to be sent to
-        the gpu and consumed in PyTorch
+        ph=patch_dimensions[0], pw=patch_dimensions[1], d=num_patches and
+        n=pc*ph*pw. These are patches ready to be sent to the gpu and
+        consumed in PyTorch directly, or wrapped in a Dataset and Dataloader
+        to facilitate batching, shuffling, etc.
     --- OPTIONAL RETURNS ---
     'original_component_means' :
       ndarray(float32, size=(n,) OR (pc, ph, pw)), optional
@@ -187,40 +196,36 @@ def create_patch_training_set(
       num_imgs = len(pre_patch_imgs)
 
       all_patches = np.zeros(
-        [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
+        [num_samples, patch_dimensions[0], patch_dimensions[1],
          num_color_channels], dtype='float32')
       if 'local_contrast_normalization' in order_of_preproc_ops:
         all_patches_contrast = np.zeros(
-          [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
+          [num_samples, patch_dimensions[0], patch_dimensions[1],
            num_color_channels], dtype='float32')
       if 'local_luminance_subtraction' in order_of_preproc_ops:
         all_patches_luminance = np.zeros(
-          [num_batches*batch_size, patch_dimensions[0], patch_dimensions[1],
+          [num_samples, patch_dimensions[0], patch_dimensions[1],
            num_color_channels], dtype='float32')
 
-      p_idx = 0
-      for batch_idx in range(num_batches):
-        for _ in range(batch_size):
-          img_idx = np.random.randint(low=0, high=num_imgs)
-          vert_pos = np.random.randint(low=min_vert_pos[img_idx],
-                                       high=max_vert_pos[img_idx])
-          horz_pos = np.random.randint(low=min_horz_pos[img_idx],
-                                       high=max_horz_pos[img_idx])
-          all_patches[p_idx] = pre_patch_imgs[img_idx][
+      for p_idx in range(num_samples):
+        img_idx = np.random.randint(low=0, high=num_imgs)
+        vert_pos = np.random.randint(low=min_vert_pos[img_idx],
+                                     high=max_vert_pos[img_idx])
+        horz_pos = np.random.randint(low=min_horz_pos[img_idx],
+                                     high=max_horz_pos[img_idx])
+        all_patches[p_idx] = pre_patch_imgs[img_idx][
+          vert_pos:vert_pos+patch_dimensions[0],
+          horz_pos:horz_pos+patch_dimensions[1]]
+        if 'local_contrast_normalization' in order_of_preproc_ops:
+          all_patches_contrast[p_idx] = image_local_contrasts[img_idx][
             vert_pos:vert_pos+patch_dimensions[0],
             horz_pos:horz_pos+patch_dimensions[1]]
-          if 'local_contrast_normalization' in order_of_preproc_ops:
-            all_patches_contrast[p_idx] = image_local_contrasts[img_idx][
-              vert_pos:vert_pos+patch_dimensions[0],
-              horz_pos:horz_pos+patch_dimensions[1]]
-          if 'local_luminance_subtraction' in order_of_preproc_ops:
-            all_patches_luminance[p_idx] = image_local_luminances[img_idx][
-              vert_pos:vert_pos+patch_dimensions[0],
-              horz_pos:horz_pos+patch_dimensions[1]]
-
-          p_idx += 1
-        if batch_idx % 1000 == 0 and batch_idx != 0:
-          print('Finished creating', batch_idx, 'batches')
+        if 'local_luminance_subtraction' in order_of_preproc_ops:
+          all_patches_luminance[p_idx] = image_local_luminances[img_idx][
+            vert_pos:vert_pos+patch_dimensions[0],
+            horz_pos:horz_pos+patch_dimensions[1]]
+        if p_idx % 100000 == 0 and p_idx != 0:
+          print('Finished creating', p_idx, 'samples')
       already_patched_flag = True
 
     elif preproc_op == 'whiten_center_surround':
@@ -305,29 +310,22 @@ def create_patch_training_set(
     else:
       raise KeyError('Unrecognized preprocessing op ' + preproc_op)
 
-  # now we finally chunk this up into batches and return
   if flatten_patches:
-    return_dict = {'batched_patches':
-        all_patches.reshape((num_batches, batch_size, -1))}
+    return_dict = {'patches': all_patches.reshape((num_samples, -1))}
     if 'local_contrast_normalization' in order_of_preproc_ops:
       return_dict['local_contrasts'] = all_patches_contrast.reshape(
-          (num_batches, batch_size, -1))
+          (num_samples, -1))
     if 'local_luminance_subtraction' in order_of_preproc_ops:
       return_dict['local_luminances'] = all_patches_luminance.reshape(
-          (num_batches, batch_size, -1))
+          (num_samples, -1))
   else:
     # torch uses a color-channel-first convention so we reshape to reflect this
-    return_dict = {'batched_patches': np.moveaxis(
-      all_patches.reshape((num_batches, batch_size) + all_patches.shape[1:]),
-      4, 2)}
+    return_dict = {'patches': np.moveaxis(all_patches, 3, 1)}
     if 'local_contrast_normalization' in order_of_preproc_ops:
-      return_dict['local_contrasts'] = np.moveaxis(
-      all_patches_contrast.reshape(
-        (num_batches, batch_size) + all_patches_contrast.shape[1:]), 4, 2)
+      return_dict['local_contrasts'] = np.moveaxis(all_patches_contrast, 3, 1)
     if 'local_luminance_subtraction' in order_of_preproc_ops:
       return_dict['local_luminances'] = np.moveaxis(
-      all_patches_luminance.reshape(
-        (num_batches, batch_size) + all_patches_luminance.shape[1:]), 4, 2)
+          all_patches_luminance, 3, 1)
 
   if 'center_each_component' in order_of_preproc_ops:
     return_dict['original_component_means'] = orig_means

@@ -8,25 +8,26 @@ these should also work well for other datasets too
 """
 import _set_the_path
 
+import math
 import pickle
 import torch
 
 from training.sparse_coding import train_dictionary
-from utils.dataset_generation import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set, OneOutputDset
 from utils import defaults
 
 RUN_IDENTIFIER = 'test_sparse_coding'
 LOGS_STORED_HERE = defaults.logging_directory
 
+TRAINING_SET_SIZE = 1000000
+VALIDATION_SET_SIZE = 10000
 BATCH_SIZE = 250
-NUM_BATCHES = 4000  # 1 million patches total
-VAL_SET_SIZE = 10000
 PATCH_HEIGHT = 16
 PATCH_WIDTH = 16
 
 CODE_SIZE = 1 * PATCH_HEIGHT*PATCH_WIDTH  # critically sampled
 NUM_EPOCHS = 10
-iters_per_epoch = NUM_BATCHES
+iters_per_epoch = int(math.ceil(TRAINING_SET_SIZE / BATCH_SIZE))
 
 LOAD_DATA_FROM_DISK = False
 if not LOAD_DATA_FROM_DISK:
@@ -34,12 +35,12 @@ if not LOAD_DATA_FROM_DISK:
   print('Creating training and validation datasets...')
   trn_val_dsets = {
       'training': create_patch_training_set(
-        num_batches=NUM_BATCHES, batch_size=BATCH_SIZE,
+        num_samples=TRAINING_SET_SIZE,
         patch_dimensions=(PATCH_HEIGHT, PATCH_WIDTH), edge_buffer=5,
         dataset='Field_NW', order_of_preproc_ops=[
           'standardize_data_range', 'whiten_center_surround', 'patch']),
       'validation': create_patch_training_set(
-        num_batches=1, batch_size=VAL_SET_SIZE,
+        num_samples=VALIDATION_SET_SIZE,
         patch_dimensions=(PATCH_HEIGHT, PATCH_WIDTH), edge_buffer=5,
         dataset='Field_NW', order_of_preproc_ops=[
           'standardize_data_range', 'whiten_center_surround', 'patch'])}
@@ -76,14 +77,19 @@ SC_PARAMS['training_visualization_schedule'].update(set(
 
 # Now initialize model and begin training
 torch_device = torch.device('cuda:1')
-torch.cuda.set_device(1)
 # otherwise can put on 'cuda:0' or 'cpu'
 
-# send ALL image patches to the GPU
-image_patches_gpu_training = torch.from_numpy(
-    trn_val_dsets['training']['batched_patches']).to(torch_device)
-image_patches_gpu_validation = torch.from_numpy(
-    trn_val_dsets['validation']['batched_patches']).to(torch_device)
+# send ALL image patches to the GPU and wrap in a simple dataloader
+image_patches_gpu_training = torch.utils.data.DataLoader(
+    OneOutputDset(torch.from_numpy(
+    trn_val_dsets['training']['patches']).to(torch_device)),
+    batch_size=BATCH_SIZE, shuffle=True)
+image_patches_gpu_validation = torch.utils.data.DataLoader(
+    OneOutputDset(torch.from_numpy(
+    trn_val_dsets['validation']['patches']).to(torch_device)),
+    batch_size=BATCH_SIZE*10)  # larger batches for validation data
+# if data is too big to all fit on GPU, just omit .to(torch_device) above.
+# Can also add num_workers=x to the DataLoader constructor
 
 # create the dictionary Tensor on the GPU
 sparse_coding_dictionary = torch.randn((CODE_SIZE, PATCH_HEIGHT*PATCH_WIDTH),

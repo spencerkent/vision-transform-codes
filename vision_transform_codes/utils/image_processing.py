@@ -451,9 +451,9 @@ def local_contrast_normalization(image, filter_sigma, return_normalizer=False):
   normalizer : ndarray(float32, size=(h, w, c)), if return_normalizer=True
   """
   window_size = 2  # in terms of sigma. This gives the size of FIR filter
-  v_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+  v_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
                        int(np.ceil(window_size*filter_sigma))+1)
-  h_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+  h_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
                        int(np.ceil(window_size*filter_sigma))+1)
   kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
   gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) /
@@ -491,9 +491,9 @@ def local_luminance_subtraction(image, filter_sigma, return_subtractor=False):
   subtractor : ndarray(float32, size=(h, w, c))
   """
   window_size = 2  # in terms of sigma. This gives the size of FIR filter
-  v_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+  v_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
                        int(np.ceil(window_size*filter_sigma))+1)
-  h_coords = np.arange(-int(np.floor(window_size*filter_sigma)),
+  h_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
                        int(np.ceil(window_size*filter_sigma))+1)
   kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
   gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) /

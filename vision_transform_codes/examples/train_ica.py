@@ -8,31 +8,32 @@ these should also work well for other datasets too
 """
 import _set_the_path
 
+import math
 import pickle
 import numpy as np
 import torch
 
 from training.ica import train_dictionary
-from utils.dataset_generation import create_patch_training_set
+from utils.dataset_generation import create_patch_training_set, OneOutputDset
 from utils import defaults
 
-RUN_IDENTIFIER = 'test_ICA'
+RUN_IDENTIFIER = 'test_ica'
 LOGS_STORED_HERE = defaults.logging_directory
 
+TRAINING_SET_SIZE = 1000000
 BATCH_SIZE = 250
-NUM_BATCHES = 4000  # 1 million patches total
 PATCH_HEIGHT = 16
 PATCH_WIDTH = 16
 
 CODE_SIZE = PATCH_HEIGHT * PATCH_WIDTH
 NUM_EPOCHS = 10
-iters_per_epoch = NUM_BATCHES
+iters_per_epoch = int(math.ceil(TRAINING_SET_SIZE / BATCH_SIZE))
 
 LOAD_DATA_FROM_DISK = False
 if not LOAD_DATA_FROM_DISK:
   SAVE_TRAINING_DATA_FOR_FASTER_RELAUNCH = True
   patch_dataset = create_patch_training_set(
-      num_batches=NUM_BATCHES, batch_size=BATCH_SIZE,
+      num_samples=TRAINING_SET_SIZE,
       patch_dimensions=(PATCH_HEIGHT, PATCH_WIDTH), edge_buffer=5,
       dataset='Field_NW',
       order_of_preproc_ops=['standardize_data_range',
@@ -49,8 +50,8 @@ ICA_PARAMS = {
     'dictionary_update_algorithm': 'ica_natural_gradient',
     'dict_update_param_schedule': {
       0: {'stepsize': 0.1, 'num_iters': 1},
-      4 * NUM_BATCHES: {'stepsize': 0.01, 'num_iters': 1},
-      8 * NUM_BATCHES: {'stepsize': 0.005, 'num_iters': 1}},
+      4 * iters_per_epoch: {'stepsize': 0.01, 'num_iters': 1},
+      8 * iters_per_epoch: {'stepsize': 0.005, 'num_iters': 1}},
     # write various tensorboard logs on the following schedule:
     'training_visualization_schedule': {
       0: None, 500: None, 1000: None, 2000: None,
@@ -61,17 +62,18 @@ ICA_PARAMS = {
     'checkpoint_schedule': {iters_per_epoch: None,
                             (NUM_EPOCHS*iters_per_epoch)-1: None}}
 ICA_PARAMS['training_visualization_schedule'].update(
-    {NUM_BATCHES*x: None for x in range(1, NUM_EPOCHS)})
+    {iters_per_epoch*x: None for x in range(1, NUM_EPOCHS)})
 
 
 # Now initialize modela and begin training
 torch_device = torch.device('cuda:1')
-torch.cuda.set_device(1)
 # otherwise can put on 'cuda:0' or 'cpu'
 
-# send ALL image patches to the GPU
-image_patches_gpu = torch.from_numpy(
-    patch_dataset['batched_patches']).to(torch_device)
+# send ALL image patches to the GPU and wrap in a simple dataloader
+image_patches_gpu = torch.utils.data.DataLoader(
+    OneOutputDset(torch.from_numpy(
+    patch_dataset['patches']).to(torch_device)),
+    batch_size=BATCH_SIZE, shuffle=True)
 
 # create the dictionary Tensor on the GPU
 Q, R = np.linalg.qr(np.random.standard_normal((CODE_SIZE,

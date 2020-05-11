@@ -189,9 +189,6 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     from dict_update_rules.fully_connected import ica_natural_gradient
   else:
     raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
-
-  batch_size = image_dataset[0].shape[0]
-  num_batches = len(image_dataset)
   ##################################
   # Done w/ setup and error checking
   ##################################
@@ -209,10 +206,10 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
         print('Iteration', total_iter_idx, 'complete')
         print('Time elapsed:', '{:.1f}'.format(time.time() - starttime),
               'seconds')
+        print('-----')
 
-      if not batch_images.is_cuda:
-        # We have to send image batch to the GPU
-        batch_images.cuda()
+      if dictionary.device != batch_images.device:
+        batch_images = batch_images.to(dictionary.device)
 
       ####################
       # Run code inference
@@ -240,13 +237,4 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
 
       total_iter_idx += 1
 
-    # we need to reshuffle the batches if we're not using a DataLoader
-    if type(image_dataset) == torch.Tensor:
-      image_dataset = image_dataset.reshape(
-          (-1,) + tuple(image_dataset.shape[2:]))[torch.randperm(
-            num_batches * batch_size)].reshape(image_dataset.shape)
-
     print("Epoch", epoch_idx, "finished")
-    # let's make sure we release any unreferenced tensor to make their memory
-    # visible to the OS
-    torch.cuda.empty_cache()  # Sep17, 2019: This may no longer be needed

@@ -20,10 +20,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   ----------
   training_image_dataset : torch.Tensor OR torch.Dataloader
       We make __getitem__ calls to either of these iterables and have them
-      return us a batch of images. If training_image_dataset is a torch Tensor,
-      that means ALL of the data is stored in the CPU's RAM or in the GPU's
-      RAM. The choice of which will have already been made when the Tensor
-      is created.
+      return us a batch of images.
       ****
       If fully-connected sparse coding is desired, this object has shape
       (k, b, n) where k is the total number of batches, n is the (flattened)
@@ -31,7 +28,10 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       convolutional sparse coding is desired, then this object has shape
       (k, b, c, h, w), where k and b are again the total number of batches and
       the batch size, while c is the number of image channels, h is
-      the (padded) height of the image, and w is the (padded) width.
+      the (padded) height of the image, and w is the (padded) width. If
+      using a Dataloader, it is possible that the last batch is smaller than
+      the others, if b does not evenly divide the number of total samples.
+      This can be avoided by drop_last to True in the DataLoader constructor
       ****
   validation_image_dataset : torch.Tensor OR torch.Dataloader
       Same convention as training images. Often there will be only a single
@@ -321,11 +321,6 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
   else:
     raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
-
-  t_batch_size = training_image_dataset[0].shape[0]
-  t_num_batches = len(training_image_dataset)
-  v_num_batches = len(validation_image_dataset)
-  v_batch_size = validation_image_dataset[0].shape[0]
   ##################################
   # Done w/ setup and error checking
   ##################################
@@ -358,29 +353,20 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       if (trn_vis_sched is not None and total_iter_idx in trn_vis_sched):
         val_metrics = []
         for v_batch_images in validation_image_dataset:
-          if dictionary.is_cuda and not v_batch_images.is_cuda:
-            v_batch_images.cuda()
+          if dictionary.device != v_batch_images.device:
+            v_batch_images = v_batch_images.to(dictionary.device)
           v_codes = infer_codes(v_batch_images)
           val_metrics.append(compute_metrics(v_batch_images, v_codes))
         send_metrics_to_tensorboard({x: np.mean([val_metrics[y][x]
           for y in range(len(val_metrics))]) for x in val_metrics[0]})
         send_dict_viz_to_tensorboard()
 
-      if dictionary.is_cuda and not t_batch_images.is_cuda:
-        t_batch_images.cuda()
+      if dictionary.device != t_batch_images.device:
+        t_batch_images = t_batch_images.to(dictionary.device)
       t_codes = infer_codes(t_batch_images)
       previous_dictionary.copy_(dictionary)
       update_dictionary(t_batch_images, t_codes)
 
       total_iter_idx += 1
 
-    # we need to reshuffle the batches if we're not using a DataLoader
-    if type(training_image_dataset) == torch.Tensor:
-      training_image_dataset = training_image_dataset.reshape(
-          (-1,) + tuple(training_image_dataset.shape[2:]))[torch.randperm(
-            t_num_batches * t_batch_size)].reshape(training_image_dataset.shape)
-
     print("Epoch", epoch_idx + 1, "finished")
-    # let's make sure we release any unreferenced tensor to make their memory
-    # visible to the OS
-    torch.cuda.empty_cache() # Sep 17, 2019: This may no longer be needed

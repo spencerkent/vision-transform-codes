@@ -531,8 +531,7 @@ def display_code_marginal_densities(codes, num_hist_bins, log_prob=False,
       fig = plt.figure(figsize=(15, 15))
       fig.suptitle(plot_title + ', fig {} of {}'.format(
                    in_de_fig_idx+1, num_de_figs), fontsize=15)
-      subplot_grid = gridspec.GridSpec(plot_sidelength, plot_sidelength,
-                                       wspace=0.35, hspace=0.35)
+      subplot_grid = gridspec.GridSpec(plot_sidelength, plot_sidelength)
 
       fig_de_idx = de_idx % de_per_fig
       while fig_de_idx < de_per_fig and de_idx < num_de:
@@ -583,6 +582,7 @@ def display_code_marginal_densities(codes, num_hist_bins, log_prob=False,
         fig.add_subplot(ax)
         fig_de_idx += 1
         de_idx += 1
+      subplot_grid.tight_layout(figure=fig, pad=3.25, w_pad=0.2, h_pad=0.2)
       de_figs.append(fig)
 
   return de_figs
