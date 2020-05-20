@@ -81,8 +81,8 @@ def run(images, dictionary, sparsity_weight, num_iters,
 
     ###### Proximal step #######
     # gradient of l2 term is <(<codes, dictionary> - images), dictionary.T>
-    codes.sub_(stepsize * torch.mm(torch.mm(codes, dictionary) - images),
-                                   dictionary.t())
+    codes.sub_(stepsize * torch.mm(torch.mm(codes, dictionary) - images,
+                                   dictionary.t()))
     if nonnegative_only:
       codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
       #^ shifted rectified linear activation
