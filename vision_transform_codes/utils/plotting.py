@@ -98,7 +98,7 @@ def standardize_for_imshow(image):
 
 
 def display_dictionary(dictionary, renormalize=False, reshaping=None,
-                       highlighting=None, plot_title=""):
+                       label_inds=False, highlighting=None, plot_title=""):
   """
   Plot each of the dictionary elements side by side
 
@@ -122,6 +122,10 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
       Should only be specified for a fully-connected dictionary (where
       dictionary.ndim==2). The dimension of each patch before vectorization
       to size n. We reshape the dictionary elements based on this. Default None
+  label_inds : bool, optional
+      Supimpose the index into the dictionary of each element in the displayed
+      grid--helps with quick lookup/selection of individual dictionary
+      elements. Default False.
   highlighting : dictionary, optional
       This is used to re-sort and color code the dictionary elements according
       to scalar weights. Has two keys:
@@ -131,6 +135,7 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
         Values less than or equal to highlighting['color_range'][0] get mapped
         to dark blue, and values greater than or equal to
         highlighting['color_range'][1] get mapped to dark red.
+      'reorder' : bool
       Default None.
   plot_title : str, optional
       The title of the plot. Default ""
@@ -141,7 +146,7 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  t_ims, raw_val_mapping = get_dictionary_tile_imgs(
+  t_ims, raw_val_mapping, lab_w_pix_coords = get_dictionary_tile_imgs(
       dictionary, reshape_to_these_dims=reshaping, indv_renorm=renormalize,
       highlights=highlighting)
   fig_refs = []
@@ -151,6 +156,11 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
     fig.suptitle(plot_title + ', fig {} of {}'.format(
                  fig_idx+1, len(t_ims)), fontsize=20)
     im_ref = ax.imshow(t_ims[fig_idx], interpolation='None')
+    if label_inds:
+      for lab_and_coord in lab_w_pix_coords[fig_idx]:
+        ax.text(lab_and_coord[2], lab_and_coord[1], lab_and_coord[0],
+                fontsize=6, verticalalignment='top',
+                horizontalalignment='left', color='w')
     ax.axis('off')
     if not renormalize:
       # add a luminance colorbar. Because there isn't good rgb colorbar
@@ -203,10 +213,11 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
     dictionary, imshow_to_raw_mapping = standardize_for_imshow(dictionary)
 
   if highlights is not None:
-    # reorder by weight
-    new_ordering = np.argsort(highlights['weights'])[::-1]
-    dictionary = dictionary[new_ordering]
-    highlights['weights'] = highlights['weights'][new_ordering]
+    if highlights['reorder']:
+      # reorder by weight
+      new_ordering = np.argsort(highlights['weights'])[::-1]
+      dictionary = dictionary[new_ordering]
+      highlights['weights'] = highlights['weights'][new_ordering]
     weight_colors = (
         (highlights['weights'] - highlights['color_range'][0]) /
         (highlights['color_range'][1] - highlights['color_range'][0]))
@@ -225,7 +236,7 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
   else:
     squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_img))+1)]
     de_per_img = squares[bisect.bisect_left(squares, num_de)]
-  plot_sidelength = int(np.sqrt(de_per_img))
+  subplot_width = int(np.sqrt(de_per_img))
 
   if dictionary.ndim == 2:
     assert reshape_to_these_dims is not None
@@ -242,17 +253,23 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
     w_margin = 6
     hl_h_margin = 2  # pixel width of the highlights
     hl_w_margin = 2
-  full_img_height = (basis_elem_size[0] * plot_sidelength +
-                     (plot_sidelength + 1) * h_margin)
-  full_img_width = (basis_elem_size[1] * plot_sidelength +
-                    (plot_sidelength + 1) * w_margin)
-
   de_idx = 0
   tile_imgs = []
+  label_with_pix_coords = []
   for in_de_img_idx in range(num_tile_imgs):
+    if in_de_img_idx != num_tile_imgs-1:
+      subplot_height = subplot_width
+    else:
+      subplot_height = int(np.ceil((num_de - de_idx) / subplot_width))
+    full_img_height = (basis_elem_size[0] * subplot_height +
+                       (subplot_height + 1) * h_margin)
+    full_img_width = (basis_elem_size[1] * subplot_width +
+                      (subplot_width + 1) * w_margin)
+
     image_matrix_shape = (full_img_height, full_img_width, 3)
     composite_img = np.ones(image_matrix_shape)
     img_de_idx = de_idx % de_per_img
+    label_with_pix_coords.append([])
     while img_de_idx < de_per_img and de_idx < num_de:
 
       if dictionary.ndim == 2:
@@ -269,13 +286,14 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
         this_de, _ = standardize_for_imshow(this_de)
 
       # okay, now actually place the DEs in this tile image
-      row_idx = img_de_idx // plot_sidelength
-      col_idx = img_de_idx % plot_sidelength
+      row_idx = img_de_idx // subplot_width
+      col_idx = img_de_idx % subplot_width
       pxr1 = row_idx * (basis_elem_size[0] + h_margin) + h_margin
       pxr2 = pxr1 + basis_elem_size[0]
       pxc1 = col_idx * (basis_elem_size[1] + w_margin) + w_margin
       pxc2 = pxc1 + basis_elem_size[1]
       composite_img[pxr1:pxr2, pxc1:pxc2] = this_de
+      label_with_pix_coords[-1].append((de_idx, pxr1, pxc1))
       if highlights is not None:
         rgb_color = blue_red(weight_colors[de_idx])[:3]
         composite_img[pxr1-hl_h_margin:pxr1,
@@ -292,7 +310,7 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
 
     tile_imgs.append(composite_img)
 
-  return tile_imgs, imshow_to_raw_mapping
+  return tile_imgs, imshow_to_raw_mapping, label_with_pix_coords
 
 
 def display_codes(codes, indv_stem_plots=True,
