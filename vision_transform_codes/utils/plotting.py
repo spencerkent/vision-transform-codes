@@ -98,7 +98,8 @@ def standardize_for_imshow(image):
 
 
 def display_dictionary(dictionary, renormalize=False, reshaping=None,
-                       label_inds=False, highlighting=None, plot_title=""):
+                       groupings=None, label_inds=False, highlighting=None,
+                       plot_title=""):
   """
   Plot each of the dictionary elements side by side
 
@@ -136,6 +137,7 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
         to dark blue, and values greater than or equal to
         highlighting['color_range'][1] get mapped to dark red.
       'reorder' : bool
+        Use the highlighting weights to reorder the dictionary.
       Default None.
   plot_title : str, optional
       The title of the plot. Default ""
@@ -146,9 +148,14 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  t_ims, raw_val_mapping, lab_w_pix_coords = get_dictionary_tile_imgs(
-      dictionary, reshape_to_these_dims=reshaping, indv_renorm=renormalize,
-      highlights=highlighting)
+  if groupings is not None:
+    t_ims = get_dictionary_tile_imgs_arr_by_group(dictionary, groupings,
+        indv_renorm=renormalize, reshape_to_these_dims=reshaping,
+        highlights=highlighting)
+  else:
+    t_ims, raw_val_mapping, lab_w_pix_coords = get_dictionary_tile_imgs(
+        dictionary, reshape_to_these_dims=reshaping, indv_renorm=renormalize,
+        highlights=highlighting)
   fig_refs = []
   for fig_idx in range(len(t_ims)):
     fig = plt.figure(figsize=(10, 10))
@@ -156,13 +163,13 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
     fig.suptitle(plot_title + ', fig {} of {}'.format(
                  fig_idx+1, len(t_ims)), fontsize=20)
     im_ref = ax.imshow(t_ims[fig_idx], interpolation='None')
-    if label_inds:
+    if label_inds and groupings is None:
       for lab_and_coord in lab_w_pix_coords[fig_idx]:
         ax.text(lab_and_coord[2], lab_and_coord[1], lab_and_coord[0],
                 fontsize=6, verticalalignment='top',
                 horizontalalignment='left', color='w')
     ax.axis('off')
-    if not renormalize:
+    if not renormalize and groupings is None:
       # add a luminance colorbar. Because there isn't good rgb colorbar
       # support in pyplot I hack this by adding another image subplot
       cbar_ax = plt.axes([0.945, 0.4, 0.01, 0.2])
@@ -206,6 +213,12 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
       Returned by standardize_for_imshow(), this indicates which values in the
       original dictionary got mapped to 0.0, 0.5, and 1.0, respectively, in
       the displayed image.
+  label_with_pix_coords : list(list(tuple))
+      Indicates the pixel location in the array/image of the upper left hand
+      corner of each dictionary element. Outer list index specifies which of
+      the individual arrays/images (usually just one), inner list index
+      specifies index of the element within the image, and the tuple has
+      three components: (*index into full dictionary*, *vert_pos*, *horz_pos*)
   """
   if indv_renorm:
     imshow_to_raw_mapping = None  # each dict element put on their own scale
@@ -311,6 +324,103 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
     tile_imgs.append(composite_img)
 
   return tile_imgs, imshow_to_raw_mapping, label_with_pix_coords
+
+
+def get_dictionary_tile_imgs_arr_by_group(dictionary, groups,
+    indv_renorm=False, reshape_to_these_dims=None, highlights=None):
+  """
+  Similar to get_dictionary_tile_imgs, but arranges into subgroups
+
+  Parameters
+  ----------
+  dictionary : ndarray(float32, size=(s, n) OR (s, c, kh, kw))
+      See docstring of display_dictionary above.
+  groups :
+      Identifies a grouping of the dictionary elements. We display these
+      together. Our convention is the following: Suppose we have
+        group_assignments = [[0, 2, 5], [1], [2, 3, 4, 5]]
+      This specifies three groups. group 0 is comprised of elements 0, 2,
+      and 5 from the dictioanary, group 1 is composed of element 1, and
+      group 2 is composed of elements 2, 3, 4, and 5. Notice that each group
+      can be of a different size and elements of the dictionary can
+      participate in multiple groups.
+  indv_renorm : bool, optional
+      See docstring of display_dictionary above. Here, though, if False,
+      the absolute color scale will be set *within a group* only, not
+      over the whole dictioary.
+  reshape_to_these_dims : tuple(int, int), optional
+      See docstring of display_dictionary above.
+  highlights : dictionary, optional
+      See docstring of display_dictionary above.
+
+  Returns
+  -------
+  composite_group_tile_img : list(ndarray)
+      RGB images to be displayed by imshow, Currently this will just be length
+      1, but I will add support for multiple images later
+  """
+  #TODO: add the ability to split up into multiple (meta) tile images,
+  #      like we do in the above function.
+
+  # generate small tiles for each subgroup. We'll then compose these together
+  small_tiles = []
+  for g_idx in range(len(groups)):
+    if highlights is not None:
+      highlights_for_group = {'color_range': highlights['color_range'],
+                              'reorder': highlights['reorder'],
+                              'weights': highlights['weights'][groups[g_idx]]}
+    else:
+      highlights_for_group = None
+    the_array, imshow_mapping, _ = get_dictionary_tile_imgs(
+      dictionary[groups[g_idx]], reshape_to_these_dims=reshape_to_these_dims,
+      indv_renorm=indv_renorm, highlights=highlights_for_group)
+    small_tiles.append(np.pad(the_array[0],
+      pad_width=((0, 1), (0, 1), (0, 0)),
+      mode='constant', constant_values=0.0))
+  native_tile_heights = [x.shape[0] for x in small_tiles]
+  native_tile_widths = [x.shape[1] for x in small_tiles]
+  composite_img_width = (int(np.ceil(np.mean(native_tile_widths))) *
+                         int(np.ceil(np.sqrt(len(small_tiles)))))
+  t_idx = 0
+  row_inds = []
+  accum_row_width = 0
+  rows = []
+  while t_idx < len(small_tiles):
+    if accum_row_width <= composite_img_width:
+      row_inds.append(t_idx)
+      accum_row_width += native_tile_widths[t_idx]
+      t_idx += 1
+    else:
+      # end of row
+      row_inds.pop(-1)
+      height_of_row = max([native_tile_heights[x] for x in row_inds])
+      row = np.ones([height_of_row, composite_img_width, 3])
+      # place tiles in row
+      px_idx = 0
+      for rt_idx in range(len(row_inds)):
+        row[:, px_idx:px_idx+native_tile_widths[row_inds[rt_idx]]] = \
+          np.pad(small_tiles[row_inds[rt_idx]], pad_width=(
+            (0, height_of_row - native_tile_heights[row_inds[rt_idx]]),
+            (0, 0), (0, 0)), mode='constant', constant_values=1.0)
+        px_idx += native_tile_widths[row_inds[rt_idx]]
+      if len(rows) > 0:
+        # add top border for this row (actually belongs to line above)
+        rows[-1][-1, 0:px_idx] = 0.0
+      else:
+        top_row_px_width = px_idx
+      rows.append(row)
+      # reset for the next row
+      row_inds = []
+      accum_row_width = 0
+      t_idx -= 1
+  composite_img = np.concatenate(rows, axis=0)
+  # add left and top border to composite image
+  top_border = np.ones((1, composite_img_width, 3))
+  top_border[:, :top_row_px_width] = 0.0
+  left_border = np.zeros((composite_img.shape[0]+1, 1, 3))
+  composite_img = np.concatenate([top_border, composite_img], axis=0)
+  composite_img = np.concatenate([left_border, composite_img], axis=1)
+  return [composite_img]
 
 
 def display_codes(codes, indv_stem_plots=True,
