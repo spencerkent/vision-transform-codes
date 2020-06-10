@@ -1,5 +1,5 @@
 """
-Iterative Soft Thresholding for fully-connected sparse inference
+Iterative Shrinkage/Thresholding for fully-connected sparse inference
 
 What I mean by fully-connected is that the basis functions have the same
 dimensionality as the images.
@@ -10,7 +10,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
         initial_codes=None, early_stopping_epsilon=None,
         nonnegative_only=False):
   """
-  Runs steps of Iterative Soft Thresholding with a constant stepsize
+  Runs steps of Iterative Shrinkage/Thresholding with a constant stepsize
 
   Computes ISTA updates on samples in parallel. Written to
   minimize data copies, for speed. Ideally, one could stop computing updates
@@ -40,7 +40,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
       Default None.
   nonnegative_only : bool, optional
       If true, our code values can only be nonnegative. We just chop off the
-      left half of the ISTA soft thresholding function and it becomes a
+      left half of the ISTA thresholding function and it becomes a
       shifted RELU function. The amount of the shift from a generic RELU is
       the sparsity_weight times the (inferred) stepsize. Default False.
 

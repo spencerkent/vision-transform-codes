@@ -1,5 +1,5 @@
 """
-Fast Iterative Soft Thresholding for fully-connected sparse inference
+Fast Iterative Shrinkage/Thresholding for fully-connected sparse inference
 
 What I mean by fully-connected is that the basis functions have the same
 dimensionality as the images.
@@ -10,7 +10,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
         initial_codes=None, early_stopping_epsilon=None,
         nonnegative_only=False):
   """
-  Runs steps of Fast Iterative Soft Thresholding, with fixed stepsize
+  Runs steps of Fast Iterative Shrinkage/Thresholding, with fixed stepsize
 
   Computes FISTA updates on samples in parallel. Written to
   minimize data copies, for speed. Ideally, one could stop computing updates
@@ -41,7 +41,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
       Default None.
   nonnegative_only : bool, optional
       If true, our code values can only be nonnegative. We just chop off the
-      left half of the ISTA soft thresholding function and it becomes a
+      left half of the ISTA thresholding function and it becomes a
       shifted RELU function. The amount of the shift from a generic RELU is
       precisely the sparsity_weight. Default False
 
@@ -69,16 +69,15 @@ def run(images, dictionary, sparsity_weight, num_iters,
   stepsize = 1. / lipschitz_constant
 
   if initial_codes is None:
-    codes = images.new_zeros(images.size(0), dictionary.size(0))
+    aux_points = images.new_zeros(images.size(0), dictionary.size(0))
   else:
-    codes = initial_codes  # warm restart, we'll begin with these values
-  aux_points = torch.zeros_like(codes).copy_(codes)
+    aux_points = initial_codes  # warm restart, we'll begin with these values
   # ^the twist in FISTA is that we compute a proximal update using a set of
   #  auxilliary points.
 
   if early_stopping_epsilon is not None:
     avg_per_component_delta = float('inf')
-  old_codes = torch.zeros_like(codes).copy_(codes)
+  old_codes = torch.zeros_like(aux_points).copy_(aux_points)
   stop_early = False
   t_kplusone = 1.
   iter_idx = 0
