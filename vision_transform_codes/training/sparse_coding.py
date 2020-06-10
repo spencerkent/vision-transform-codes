@@ -55,7 +55,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
         The number of times to cycle over the whole dataset, reshuffling the
         order of the patches.
       'code_inference_algorithm' : str
-        One of {'ista', 'fista', 'subspace_ista'}
+        One of {'ista', 'fista', 'subspace_ista', 'subspace_fista'}
       'dictionary_update_algorithm' : str
         One of {'sc_steepest_descent', 'sc_cheap_quadratic_descent',
                 'subspace_sc_cheap_quadratic_descent'}
@@ -127,7 +127,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     else:
       inf_alg_inputs.update({'images_prepadded': batch_images,
         'kernel_stride': kernel_strides, 'padding_dims': image_padding})
-    if code_inf_alg == 'subspace_ista':
+    if code_inf_alg in ['subspace_ista', 'subspace_fista']:
       inf_alg_inputs.update({'group_assignments': group_assignments})
       inf_alg_inputs.pop('nonnegative_only')
     batch_codes = inference_alg.run(**inf_alg_inputs)
@@ -187,7 +187,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     metrics['Average LASSO L2 component'] = np.mean(0.5 *
         np.sum(np.square(recons - batch_images_np), axis=axes_of_summation))
         # for some stupid reason numpy.linalg.norm doesn't work on 4d tensors
-    if code_inf_alg == 'subspace_ista':
+    if code_inf_alg in ['subspace_ista', 'subspace_fista']:
       sum_of_group_norms = np.zeros((len(batch_codes),))
       for g_idx in range(len(group_assignments)):
         sum_of_group_norms += torch.norm(
@@ -275,7 +275,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   dict_update_alg = all_params['dictionary_update_algorithm']
   dict_update_param_schedule = all_params['dict_update_param_schedule']
   assert coding_mode in ['fully-connected', 'convolutional']
-  assert code_inf_alg in ['ista', 'fista', 'subspace_ista']
+  assert code_inf_alg in ['ista', 'fista', 'subspace_ista', 'subspace_fista']
   assert dict_update_alg in ['sc_steepest_descent',
                              'sc_cheap_quadratic_descent',
                              'subspace_sc_cheap_quadratic_descent']
@@ -333,6 +333,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   if ckpt_sched is not None or trn_vis_sched is not None:
     import yaml
     # dump the parameters of this training session in human-readable JSON
+    # TODO: figure out a more readable, importable serialization
     saved_training_params = {
         k: all_params[k] for k in all_params if k not in
         ['checkpoint_schedule', 'training_visualization_schedule']}
@@ -353,13 +354,17 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       from analysis_transforms.fully_connected import fista as inference_alg
     else:
       from analysis_transforms.convolutional import fista as inference_alg
-  elif code_inf_alg == 'subspace_ista':
+  elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
     # specify each group's members once, no duplicates
     assert all([len(set(x)) == len(x) for x in all_params['group_assignments']])
     group_assignments = all_params['group_assignments']
     if coding_mode == 'fully-connected':
-      from analysis_transforms.fully_connected import (
-          subspace_ista as inference_alg)
+      if code_inf_alg == 'subspace_ista':
+        from analysis_transforms.fully_connected import (
+            subspace_ista as inference_alg)
+      else:
+        from analysis_transforms.fully_connected import (
+            subspace_fista as inference_alg)
     else:
       raise KeyError('Havent implemented subspace ISTA for convolutional yet')
   else:
