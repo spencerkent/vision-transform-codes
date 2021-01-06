@@ -56,26 +56,36 @@ def run(images, dictionary, codes, group_assignments,
       If true, we normalize each dictionary element to have l2 norm equal to 1
       before we return. Default True.
   """
-  accum_regularization_gradients = dictionary.new_zeros(dictionary.size())
-  for iter_idx in range(num_iters):
-    # compute regularization gradients first. We accumulate gradients from
-    # multiple groups, if necessary.
-    if iter_idx > 0:
-      accum_regularization_gradients.mul_(0.)
-    for g_idx in range(len(group_assignments)):
-      accum_regularization_gradients[group_assignments[g_idx]] = (
-          accum_regularization_gradients[group_assignments[g_idx]] +
-          regularization_gradients(dictionary[group_assignments[g_idx]],
-                                   normalize_dictionary))
-    dict_update = stepsize * ((torch.mm(
-      codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0)) +
-      alignment_penalty * accum_regularization_gradients)
-    # ^first term is the gradient of the reconstruction error, the second term
-    #  is the (already computed) gradient of the alignment regularization
-    dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
-    dictionary.sub_(dict_update)
-    if normalize_dictionary:
-      dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])
+  if alignment_penalty == 0:
+    # for speed. Remove this
+    for iter_idx in range(num_iters):
+      dict_update = stepsize * (torch.mm(
+        codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0))
+      dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
+      dictionary.sub_(dict_update)
+      if normalize_dictionary:
+        dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])
+  else:
+    accum_regularization_gradients = dictionary.new_zeros(dictionary.size())
+    for iter_idx in range(num_iters):
+      # compute regularization gradients first. We accumulate gradients from
+      # multiple groups, if necessary.
+      if iter_idx > 0:
+        accum_regularization_gradients.mul_(0.)
+      for g_idx in range(len(group_assignments)):
+        accum_regularization_gradients[group_assignments[g_idx]] = (
+            accum_regularization_gradients[group_assignments[g_idx]] +
+            regularization_gradients(dictionary[group_assignments[g_idx]],
+                                     normalize_dictionary))
+      dict_update = stepsize * ((torch.mm(
+        codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0)) +
+        alignment_penalty * accum_regularization_gradients)
+      # ^first term is the gradient of the reconstruction error, the second term
+      #  is the (already computed) gradient of the alignment regularization
+      dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
+      dictionary.sub_(dict_update)
+      if normalize_dictionary:
+        dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])
 
 
 def regularization_gradients(dictionary, dict_is_normalized):

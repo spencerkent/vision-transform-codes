@@ -165,8 +165,8 @@ def train_dictionary(image_dataset, init_dictionary, all_params):
     from torch.utils.tensorboard import SummaryWriter
     trn_vis_sched = all_params['training_visualization_schedule']
     tb_summary_writer = SummaryWriter(logging_path)
-    if 'reshaped_kernel_size' in trn_vis_sched:
-      kernel_reshaping = trn_vis_sched.pop('reshaped_kernel_size')
+    if 'reshaped_kernel_size' in all_params:
+      kernel_reshaping = all_params.pop('reshaped_kernel_size')
     else:
       kernel_reshaping = None
   else:

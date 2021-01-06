@@ -8,7 +8,7 @@ import torch
 
 def run(images, dictionary, sparsity_weight, num_iters,
         initial_codes=None, early_stopping_epsilon=None,
-        nonnegative_only=False):
+        nonnegative_only=False, hard_threshold=False):
   """
   Runs steps of Fast Iterative Shrinkage/Thresholding, with fixed stepsize
 
@@ -43,7 +43,10 @@ def run(images, dictionary, sparsity_weight, num_iters,
       If true, our code values can only be nonnegative. We just chop off the
       left half of the ISTA thresholding function and it becomes a
       shifted RELU function. The amount of the shift from a generic RELU is
-      precisely the sparsity_weight. Default False
+      proportional to the sparsity_weight. Default False.
+  hard_threshold : bool, optional
+      The hard thresholding function is the identity outside of the zeroed
+      region. Default False.
 
   Returns
   -------
@@ -88,15 +91,21 @@ def run(images, dictionary, sparsity_weight, num_iters,
     # grad of l2 term w/ aux is <(<aux, dictionary> - images), dictionary.T>
     codes = aux_points - stepsize * torch.mm(
         torch.mm(aux_points, dictionary) - images, dictionary.t())
-    if nonnegative_only:
-      codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
-      #^ shifted rectified linear activation
+    if hard_threshold:
+      if nonnegative_only:
+        codes[codes < (sparsity_weight*stepsize)] = 0
+      else:
+        codes[torch.abs(codes) < (sparsity_weight*stepsize)] = 0
     else:
-      pre_threshold_sign = torch.sign(codes)
-      codes.abs_()
-      codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
-      codes.mul_(pre_threshold_sign)
-      #^ now contains the "soft thresholded" (non-rectified) output x_{k+1}
+      if nonnegative_only:
+        codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+        #^ shifted rectified linear activation
+      else:
+        pre_threshold_sign = torch.sign(codes)
+        codes.abs_()
+        codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+        codes.mul_(pre_threshold_sign)
+        #^ now contains the "soft thresholded" (non-rectified) output x_{k+1}
     ###### Proximal step using aux pts #######
     t_kplusone = (1 + (1 + (4 * t_k**2))**0.5) / 2
     beta_kplusone = (t_k - 1) / t_kplusone

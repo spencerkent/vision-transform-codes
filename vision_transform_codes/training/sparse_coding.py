@@ -4,6 +4,8 @@ This implements sparse coding dictionary learning
 import time
 import torch
 
+from utils import plotting as plot_utils
+
 def train_dictionary(training_image_dataset, validation_image_dataset,
                      init_dictionary, all_params):
   """
@@ -58,6 +60,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
         One of {'ista', 'fista', 'subspace_ista', 'subspace_fista'}
       'dictionary_update_algorithm' : str
         One of {'sc_steepest_descent', 'sc_cheap_quadratic_descent',
+                'subspace_sc_steepest_descent',
                 'subspace_sc_cheap_quadratic_descent'}
       'inference_param_schedule' : dictionary
         Dictionary containing iteration indexes at which to set/update
@@ -121,7 +124,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   def infer_codes(batch_images):
     inf_alg_inputs = {
         'dictionary': dictionary, 'sparsity_weight': sparsity_weight,
-        'num_iters': inf_num_iters, 'nonnegative_only': nonneg_only}
+        'num_iters': inf_num_iters, 'nonnegative_only': nonneg_only,
+        'hard_threshold': hard_threshold}
     if coding_mode == 'fully-connected':
       inf_alg_inputs.update({'images': batch_images})
     else:
@@ -141,21 +145,21 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     else:
       dict_upd_alg_inputs.update({'images_prepadded': batch_images,
         'kernel_stride': kernel_strides, 'padding_dims': image_padding})
-    if dict_update_alg == 'sc_cheap_quadratic_descent':
+    if dict_update_alg in ['sc_cheap_quadratic_descent',
+                           'subspace_sc_cheap_quadratic_descent']:
       if coding_mode == 'fully-connected':
         hessian_diag.mul_(0.99).add_(torch.pow(batch_codes, 2).mean(0)/100)
       else:
+        if dict_update_alg == 'subspace_sc_cheap_quadratic_descent':
+          raise NotImplementedError('TODO for convolutional')
         # the diagonal of the hessian has each code correlated with itself
         # which is the sum of squared values:
         hessian_diag.mul_(0.99).add_(
             torch.mean(torch.sum(batch_codes**2, dim=(2, 3)), dim=0) / 100)
-    elif dict_update_alg == 'subspace_sc_cheap_quadratic_descent':
-      if coding_mode == 'fully-connected':
-        hessian_diag.mul_(0.99).add_(torch.pow(batch_codes, 2).mean(0)/100)
-      else:
-        raise NotImplementedError('TODO for convolutional')
+      dict_upd_alg_inputs.update({'hessian_diagonal': hessian_diag})
+    if dict_update_alg in ['subspace_sc_steepest_descent',
+                           'subspace_sc_cheap_quadratic_descent']:
       dict_upd_alg_inputs.update({
-        'hessian_diagonal': hessian_diag,
         'group_assignments': group_assignments,
         'alignment_penalty': subspace_alignment_penalty})
     dict_update.run(**dict_upd_alg_inputs)
@@ -230,7 +234,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     # There's probably a more elegant way to do this, but it works for now...
     tiled_kernel_figs = display_dictionary(
         dictionary.cpu().numpy(), reshaping=kernel_reshaping,
-        renormalize=True,
+        groupings=group_assignments, renormalize=True,
         plot_title='Current dictionary (renormalized), iter{}'.format(
           total_iter_idx))
     for fig_idx in range(len(tiled_kernel_figs)):
@@ -240,7 +244,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     del tiled_kernel_figs
     tiled_kernel_figs = display_dictionary(
         dictionary.cpu().numpy(), reshaping=kernel_reshaping,
-        renormalize=False,
+        groupings=group_assignments, renormalize=False,
         plot_title='Current dictionary (no renorm), iter {}'.format(
           total_iter_idx))
     for fig_idx in range(len(tiled_kernel_figs)):
@@ -278,6 +282,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   assert code_inf_alg in ['ista', 'fista', 'subspace_ista', 'subspace_fista']
   assert dict_update_alg in ['sc_steepest_descent',
                              'sc_cheap_quadratic_descent',
+                             'subspace_sc_steepest_descent',
                              'subspace_sc_cheap_quadratic_descent']
   if coding_mode == 'convolutional':
     kernel_strides = all_params['strides']
@@ -288,6 +293,20 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     nonneg_only = all_params['nonnegative_only']
   else:
     nonneg_only = False
+  if 'hard_threshold' in all_params:
+    hard_threshold = all_params['hard_threshold']
+  else:
+    hard_threshold = False
+  if 'group_assignments' in all_params:
+    # specify each group's members once, no duplicates
+    assert all([len(set(x)) == len(x) for x in all_params['group_assignments']])
+    group_assignments = all_params['group_assignments']
+    if type(group_assignments[0]) != list:
+      # yaml serialization of numpy arrays doesn't work well, so we'll make
+      # sure it's a list, just in case.
+      group_assignments = [x.tolist() for x in group_assignments]
+  else:
+    group_assignments = None
   if 'renormalize_dictionary' in all_params:
     renormalize_dictionary = all_params['renormalize_dictionary']
   else:
@@ -332,17 +351,27 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     trn_vis_sched = None
   if ckpt_sched is not None or trn_vis_sched is not None:
     import yaml
-    # dump the parameters of this training session in human-readable JSON
-    # TODO: figure out a more readable, importable serialization
     saved_training_params = {
         k: all_params[k] for k in all_params if k not in
-        ['checkpoint_schedule', 'training_visualization_schedule']}
+        ['checkpoint_schedule', 'training_visualization_schedule',
+         'group_assignments']}
+    # add back in list-ified group assignment
+    saved_training_params.update({'group_assignments': group_assignments})
     yaml.dump(saved_training_params,
-              open(logging_path / 'training_params.yaml', 'w'))
+              open(logging_path / 'training_params.yaml', 'w'),
+              default_flow_style=None)
+    # for good measure, let's just save the entire calling script. We have it
+    # as a string here:
+    with open(logging_path / 'called_script.py', 'w') as saved_script:
+      saved_script.write(all_params['str_entire_calling_script'])
   if 'stdout_print_interval' in all_params:
     print_interval = all_params['stdout_print_interval']
   else:
     print_interval = 1000
+  if 'dict_element_rp_schedule' in all_params:
+    dict_element_rp_schedule = all_params['dict_element_rp_schedule']
+  else:
+    dict_element_rp_schedule = None
 
   if code_inf_alg == 'ista':
     if coding_mode == 'fully-connected':
@@ -355,9 +384,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     else:
       from analysis_transforms.convolutional import fista as inference_alg
   elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
-    # specify each group's members once, no duplicates
-    assert all([len(set(x)) == len(x) for x in all_params['group_assignments']])
-    group_assignments = all_params['group_assignments']
+    assert group_assignments is not None
     if coding_mode == 'fully-connected':
       if code_inf_alg == 'subspace_ista':
         from analysis_transforms.fully_connected import (
@@ -385,6 +412,14 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       from dict_update_rules.convolutional import (
           sc_cheap_quadratic_descent as dict_update)
     hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
+  elif dict_update_alg == 'subspace_sc_steepest_descent':
+    if coding_mode == 'fully-connected':
+      from dict_update_rules.fully_connected import (
+          subspace_sc_steepest_descent as dict_update)
+    else:
+      raise KeyError('Not implemented for convolutional')
+    group_assignments = all_params['group_assignments']
+    subspace_alignment_penalty = all_params['subspace_alignment_penalty']
   elif dict_update_alg == 'subspace_sc_cheap_quadratic_descent':
     if coding_mode == 'fully-connected':
       from dict_update_rules.fully_connected import (
@@ -421,6 +456,31 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       if total_iter_idx in dict_update_param_schedule:
         d_upd_stp= dict_update_param_schedule[total_iter_idx]['stepsize']
         d_upd_niters = dict_update_param_schedule[total_iter_idx]['num_iters']
+      if (dict_element_rp_schedule is not None and  #{r}eset or {p}rune
+          total_iter_idx in dict_element_rp_schedule):
+        f_type = dict_element_rp_schedule[total_iter_idx]['filter_type']
+        f_params = dict_element_rp_schedule[total_iter_idx]['filter_params']
+        f_params.update({'group_assignments': group_assignments,
+                         'coding_mode': coding_mode})
+        rp_action = dict_element_rp_schedule[total_iter_idx]['action']
+        # at least one of the reset-or-prune modes requires an estimate
+        # of the code distribution -- we'll use the validation dataset for this
+        v_codes = []
+        for v_batch_images in validation_image_dataset:
+          if dictionary.device != v_batch_images.device:
+            v_batch_images = v_batch_images.to(dictionary.device)
+          v_codes.append(infer_codes(v_batch_images))
+        v_codes = torch.cat(v_codes)  # whole validation set...
+        dictionary, affected_elems = reset_or_prune_dict_elements(
+            dictionary, v_codes, f_type, f_params, rp_action)
+        if rp_action == 'prune' and len(affected_elems) > 0:
+          previous_dictionary.copy_(dictionary)
+          if dict_update_alg in ['sc_cheap_quadratic_descent',
+                                 'subspace_sc_cheap_quadratic_descent']:
+            inds = torch.ones(dictionary.size(0), dtype=torch.bool)
+            inds[affected_elems] = False
+            hessian_diag = hessian_diag[inds]
+        # TODO: WARNING: doesn't yet work for pruning. (have to update element inds)
 
       if (ckpt_sched is not None and total_iter_idx in ckpt_sched):
         save_checkpoint(logging_path /
@@ -445,3 +505,215 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       total_iter_idx += 1
 
     print("Epoch", epoch_idx + 1, "finished")
+
+
+def reset_or_prune_dict_elements(dictionary, codes, filter_type,
+                                 filter_params, action):
+  """
+  Reset (to random) or prune some elements of a dictionary used during training
+
+  I'm defining this outside the train_dictionary() function because it's fairly
+  self-contained and otherwise would be an annoyingly long helper function
+  """
+  import numpy as np
+  from matplotlib import pyplot as plt
+
+  groups = filter_params['group_assignments']
+  coding_mode = filter_params['coding_mode']
+  if coding_mode == 'fully-connected':
+    if filter_type == 'random':
+      modify_these = np.random.choice(np.arange(dictionary.size(0)),
+                                      filter_params['num_to_modify'])
+      if action == 'reset':
+        # reset with noise that has norm equal to the average norm across dict
+        average_norm = torch.mean(dictionary.norm(p=2, dim=1))
+        noise = torch.randn((len(modify_these), dictionary.size(1)),
+                            device=dictionary.device)
+        noise.mul_(average_norm / noise.norm(p=2, dim=1)[:, None])
+        dictionary[modify_these] = noise
+      else:
+        # prune these
+        inds = torch.ones(dictionary.size(0), dtype=torch.bool)
+        inds[modify_these] = False
+        dictionary = dictionary[inds]
+        for g_idx in range(len(groups)):
+          new_group = []
+          for de_idx in groups[g_idx]:
+            if de_idx not in modify_these:
+              new_group.append(de_idx)
+          groups[g_idx] = new_group
+      return dictionary, modify_these
+    elif filter_type == 'cosine_sim_threshold':
+      # reset element that are too close in cosine similarity to other elements
+      if filter_params['cue_user']:
+        # ask the user what the threshold should be
+        if filter_params['only_sim_within_group']:
+          # do this one group at a time, only use similarity within group
+          assert groups is not None
+          all_similarities = []
+          for g_idx in range(len(groups)):
+            norms = torch.norm(dictionary[groups[g_idx]],
+                               p=2, dim=1, keepdim=True)
+            cos_sims = (torch.mm(dictionary[groups[g_idx]],
+                                 dictionary[groups[g_idx]].t()) /
+                        torch.mm(norms, norms.t())).cpu().numpy()
+            upper_diag_inds = np.triu_indices(
+                n=cos_sims.shape[0], k=1, m=cos_sims.shape[1])
+            upper_diag_sims_flat = cos_sims[upper_diag_inds[0],
+                                            upper_diag_inds[1]]
+            all_similarities.append(upper_diag_sims_flat)
+          all_similarities = np.concatenate(all_similarities)
+        else:
+          norms = torch.norm(dictionary, p=2, dim=1, keepdim=True)
+          cos_sims = (torch.mm(dictionary, dictionary.t()) /
+                      torch.mm(norms, norms.t())).cpu().numpy()
+          upper_diag_inds = np.triu_indices(
+              n=cos_sims.shape[0], k=1, m=cos_sims.shape[1])
+          all_similarities = cos_sims[upper_diag_inds[0], upper_diag_inds[1]]
+        sim_fig = plt.figure()
+        ax = plt.subplot(111)
+        ax.bar(np.arange(len(all_similarities)), all_similarities,
+               align='center', color='b', width=1)
+        ax.set_ylabel('Pairwise cosine similarities')
+        ax.set_xlabel('Possible distinct pairs')
+        plt.show()
+        csim_threshold = float(input(
+          'Please select a threshold for resetting/pruning dict elements: '))
+      else:
+        # don't cue user, this should be a parameter
+        csim_threshold = filter_params['threshold']
+      if filter_params['only_sim_within_group']:
+        modify_these = []
+        for g_idx in range(len(groups)):
+          norms = torch.norm(dictionary[groups[g_idx]],
+                             p=2, dim=1, keepdim=True)
+          cos_sims = (torch.mm(dictionary[groups[g_idx]],
+                               dictionary[groups[g_idx]].t()) /
+                      torch.mm(norms, norms.t())).cpu().numpy()
+          problem_pairs = np.argwhere(np.abs(np.triu(cos_sims, k=1)) > csim_threshold)
+          temp_mt = []
+          for pair in problem_pairs:
+            if pair[0] not in temp_mt and pair[1] not in temp_mt:
+              temp_mt.append(pair[np.random.choice([0, 1])])
+          if len(temp_mt) > 0:
+            print('Action ', action, 'applied to ', temp_mt, 'in group', g_idx)
+            if action == 'reset':
+              average_norm = torch.mean(dictionary[groups[g_idx]].norm(p=2, dim=1))
+              noise = torch.randn((len(temp_mt), dictionary.shape[1]),
+                                  device=dictionary.device)
+              noise.mul_(average_norm / noise.norm(p=2, dim=1)[:, None])
+              dictionary[np.array(groups[g_idx])[temp_mt]] = noise
+            modify_these.append(np.array(groups[g_idx])[temp_mt])
+        modify_these = np.array(modify_these).flatten()
+        if action == 'prune':
+          if len(modify_these) > 0:
+            # prune
+            inds = torch.ones(dictionary.size(0), dtype=torch.bool)
+            inds[modify_these] = False
+            dictionary = dictionary[inds]
+            for g_idx in range(len(groups)):
+              new_group = []
+              for de_idx in groups[g_idx]:
+                if de_idx not in modify_these:
+                  new_group.append(de_idx)
+              groups[g_idx] = new_group
+        return dictionary, modify_these
+      else:
+        norms = torch.norm(dictionary, p=2, dim=1, keepdim=True)
+        cos_sims = (torch.mm(dictionary, dictionary.t()) /
+                    torch.mm(norms, norms.t())).cpu().numpy()
+        problem_pairs = np.argwhere(np.triu(cos_sims, k=1) > csim_threshold)
+        modify_these = []
+        for pair in problem_pairs:
+          if pair[0] not in modify_these and pair[1] not in modify_these:
+            modify_these.append(pair[np.random.choice([0, 1])])
+        modify_these = np.array(modify_these)
+        if len(modify_these) > 0:
+          if action == 'reset':
+            average_norm = torch.mean(dictionary.norm(p=2, dim=1))
+            noise = torch.randn((len(modify_these), dictionary.shape[1]),
+                                device=dictionary.device)
+            noise.mul_(average_norm / noise.norm(p=2, dim=1)[:, None])
+            dictionary[modify_these] = noise
+          else:
+            # prune
+            inds = torch.ones(dictionary.size(0), dtype=torch.bool)
+            inds[modify_these] = False
+            dictionary = dictionary[inds]
+            for g_idx in range(len(groups)):
+              new_group = []
+              for de_idx in groups[g_idx]:
+                if de_idx not in modify_these:
+                  new_group.append(de_idx)
+              groups[g_idx] = new_group
+        return dictionary, modify_these
+    elif filter_type == 'nonuniformity_within_group':
+      # identify groups that are outliers in the degree to which nonzero
+      # activations are nonuniformly distributed within the group.
+      num_great_circles = filter_params['num_gc_in_average']
+      group_renormed_mean_variances = []
+      for g_idx in range(len(groups)):
+        samples_where_nonzero = torch.nonzero(
+            torch.sum(codes[: , groups[g_idx]] != 0, dim=1), as_tuple=True)[0]
+        nz_codes = codes[samples_where_nonzero][:,  groups[g_idx]]
+        # removed_norm
+        norms = torch.norm(nz_codes, p=2, dim=1, keepdim=True)
+        renormed = nz_codes / norms
+        # we take projections onto *great circles* of the unit sphere,
+        # computing the average variance of these projections as a proxy
+        # measure of the amount of nonuniformity for the renormalized codes
+        variances = []
+        for gc_idx in range(num_great_circles):
+          # get a random great circle of the unit sphere
+          first_vec = np.random.randn(len(groups[g_idx]))
+          first_vec /= np.linalg.norm(first_vec)
+          second_vec = np.random.randn(len(groups[g_idx]))
+          second_vec /= np.linalg.norm(second_vec)
+          plane_basis, _ = np.linalg.qr(np.c_[first_vec, second_vec])
+          great_circle_projection = np.dot(renormed.cpu().numpy(), plane_basis)
+          projection_angle = np.angle(great_circle_projection[:, 0] +
+                                      1j*great_circle_projection[:, 1])
+          hist_nbins = 20
+          histogram_bin_edges = np.linspace(-np.pi, np.pi, hist_nbins+1)
+          histogram_bin_centers = (histogram_bin_edges[:-1] +
+                                   histogram_bin_edges[1:]) / 2
+          counts, _ = np.histogram(projection_angle, histogram_bin_edges)
+          empirical_density = counts / np.sum(counts)
+          variances.append(np.var(empirical_density))
+        group_renormed_mean_variances.append(np.mean(variances))
+      # we look at all the groups and flag any group who's mean variance
+      # is more than 1 standard deviation from the mean of these means
+      mean_of_means = np.mean(group_renormed_mean_variances)
+      std_of_means = np.std(group_renormed_mean_variances)
+      g_modify_these = np.nonzero(
+          np.logical_and(
+            np.abs(np.array(group_renormed_mean_variances) - mean_of_means) >
+            std_of_means,
+            np.abs(np.array(group_renormed_mean_variances)) > 0.002))[0]
+      modify_these = np.array([groups[x] for x in g_modify_these]).flatten()
+      # reset with noise that has norm equal to the average norm across dict
+      if len(modify_these) > 0:
+        if action == 'reset':
+          average_norm = torch.mean(dictionary.norm(p=2, dim=1))
+          noise = torch.randn((len(modify_these), dictionary.shape[1]),
+                              device=dictionary.device)
+          noise.mul_(average_norm / noise.norm(p=2, dim=1)[:, None])
+          dictionary[modify_these] = noise
+        else:
+          # prune, not exactly sure which to prune here. I'll just pick one
+          inds = torch.ones(dictionary.size(0), dtype=torch.bool)
+          inds[modify_these] = False
+          dictionary = dictionary[inds]
+          for g_idx in range(len(groups)):
+            new_group = []
+            for de_idx in groups[g_idx]:
+              if de_idx not in modify_these:
+                new_group.append(de_idx)
+            groups[g_idx] = new_group
+      return dictionary, modify_these
+    else:
+      raise KeyError('Unrecognized reset type')
+  elif coding_mode == 'convolutional':
+    raise NotImplementedError('Not yet implemented for convolutional dict')
+  else:
+    raise KeyError('Unrecognized coding mode')

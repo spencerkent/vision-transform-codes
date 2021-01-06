@@ -187,7 +187,8 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
 
 
 def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
-                             reshape_to_these_dims=None, highlights=None):
+                             reshape_to_these_dims=None, highlights=None,
+                             one_d_tile=False):
   """
   Arranges a dictionary into a series of imgs that tile elements side by side
 
@@ -204,6 +205,10 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
       See docstring of display_dictionary above.
   highlights : dictionary, optional
       See docstring of display_dictionary above.
+  one_d_tile : bool, optional
+      Force the tile to just be side-by-side 1d. Otherwise we find the nearest
+      square-shaped tile. This option is useful for subgroup plotting, where
+      we might want to have small subgroups displayed 1d. Default False.
 
   Returns
   -------
@@ -238,8 +243,11 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
       print('Warning: Red and Blue will not correspond',
             'to positive and negative weights')
 
-  max_de_per_img = 80*80  # max 80x80 {d}ictionary {e}lements per tile img
-  assert np.sqrt(max_de_per_img) % 1 == 0, 'please pick a square number'
+  if one_d_tile:
+    max_de_per_img = 80
+  else:
+    max_de_per_img = 80*80  # max 80x80 {d}ictionary {e}lements per tile img
+    assert np.sqrt(max_de_per_img) % 1 == 0, 'please pick a square number'
   num_de = dictionary.shape[0]
   num_tile_imgs = int(np.ceil(num_de / max_de_per_img))
   # this determines how many dictionary elements are arranged in a square
@@ -247,9 +255,15 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
   if num_tile_imgs > 1:
     de_per_img = max_de_per_img
   else:
-    squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_img))+1)]
-    de_per_img = squares[bisect.bisect_left(squares, num_de)]
-  subplot_width = int(np.sqrt(de_per_img))
+    if one_d_tile:
+      de_per_img = num_de
+    else:
+      squares = [x**2 for x in range(1, int(np.sqrt(max_de_per_img))+1)]
+      de_per_img = squares[bisect.bisect_left(squares, num_de)]
+  if one_d_tile:
+    subplot_width = de_per_img
+  else:
+    subplot_width = int(np.sqrt(de_per_img))
 
   if dictionary.ndim == 2:
     assert reshape_to_these_dims is not None
@@ -270,10 +284,13 @@ def get_dictionary_tile_imgs(dictionary, indv_renorm=False,
   tile_imgs = []
   label_with_pix_coords = []
   for in_de_img_idx in range(num_tile_imgs):
-    if in_de_img_idx != num_tile_imgs-1:
-      subplot_height = subplot_width
+    if one_d_tile:
+      subplot_height = 1
     else:
-      subplot_height = int(np.ceil((num_de - de_idx) / subplot_width))
+      if in_de_img_idx != num_tile_imgs-1:
+        subplot_height = subplot_width
+      else:
+        subplot_height = int(np.ceil((num_de - de_idx) / subplot_width))
     full_img_height = (basis_elem_size[0] * subplot_height +
                        (subplot_height + 1) * h_margin)
     full_img_width = (basis_elem_size[1] * subplot_width +
@@ -371,28 +388,37 @@ def get_dictionary_tile_imgs_arr_by_group(dictionary, groups,
                               'weights': highlights['weights'][groups[g_idx]]}
     else:
       highlights_for_group = None
+    if len(groups[g_idx]) < 8:
+      make_subtiles_flat = True
+    else:
+      make_subtiles_flat = False
     the_array, imshow_mapping, _ = get_dictionary_tile_imgs(
       dictionary[groups[g_idx]], reshape_to_these_dims=reshape_to_these_dims,
-      indv_renorm=indv_renorm, highlights=highlights_for_group)
+      indv_renorm=indv_renorm, highlights=highlights_for_group,
+      one_d_tile=make_subtiles_flat)
     small_tiles.append(np.pad(the_array[0],
       pad_width=((0, 1), (0, 1), (0, 0)),
       mode='constant', constant_values=0.0))
   native_tile_heights = [x.shape[0] for x in small_tiles]
   native_tile_widths = [x.shape[1] for x in small_tiles]
-  composite_img_width = (int(np.ceil(np.mean(native_tile_widths))) *
-                         int(np.ceil(np.sqrt(len(small_tiles)))))
+  composite_img_width= int(np.ceil(
+    np.mean(native_tile_widths) * np.sqrt(
+      len(small_tiles) * np.mean(native_tile_heights) /
+      np.mean(native_tile_widths))))
+  #^ this just makes the resultant images approximately square even when
+  # there are some very oddly-sized groups
+
   t_idx = 0
-  row_inds = []
-  accum_row_width = 0
+  row_inds = [0]
+  accum_row_width = native_tile_widths[0]
   rows = []
-  while t_idx < len(small_tiles):
-    if accum_row_width <= composite_img_width:
-      row_inds.append(t_idx)
-      accum_row_width += native_tile_widths[t_idx]
-      t_idx += 1
-    else:
+  for t_idx in range(len(small_tiles)-1):
+    if (accum_row_width + native_tile_widths[t_idx+1] > composite_img_width or
+        t_idx == len(small_tiles)-2):
       # end of row
-      row_inds.pop(-1)
+      if t_idx == len(small_tiles)-2:
+        if accum_row_width + native_tile_widths[t_idx+1] <= composite_img_width:
+          row_inds.append(t_idx+1)
       height_of_row = max([native_tile_heights[x] for x in row_inds])
       row = np.ones([height_of_row, composite_img_width, 3])
       # place tiles in row
@@ -409,10 +435,17 @@ def get_dictionary_tile_imgs_arr_by_group(dictionary, groups,
       else:
         top_row_px_width = px_idx
       rows.append(row)
+      if ((t_idx == len(small_tiles)-2) and
+          (accum_row_width + native_tile_widths[t_idx+1] > composite_img_width)):
+        # add a last straggler row for this small tile
+        row = np.ones([native_tile_heights[t_idx+1], composite_img_width, 3])
+        row[:, 0:native_tile_widths[t_idx+1]] = small_tiles[t_idx+1]
+        rows.append(row)
       # reset for the next row
       row_inds = []
       accum_row_width = 0
-      t_idx -= 1
+    accum_row_width += native_tile_widths[t_idx+1]
+    row_inds.append(t_idx+1)
   composite_img = np.concatenate(rows, axis=0)
   # add left and top border to composite image
   top_border = np.ones((1, composite_img_width, 3))
@@ -424,7 +457,7 @@ def get_dictionary_tile_imgs_arr_by_group(dictionary, groups,
 
 
 def display_codes(codes, indv_stem_plots=True,
-                  input_and_recon=None, plot_title=""):
+                  input_and_recon=None, data_pt_per_fig=None, plot_title=""):
   """
   Visualizes tranform codes
 
@@ -456,7 +489,7 @@ def display_codes(codes, indv_stem_plots=True,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  # TODO: get this set up for convolutional codes
+  # TODO: get this set up for convolutional codes. Also refactor fluff
   num_codes = codes.shape[0]
   code_size = codes.shape[1]
   if indv_stem_plots:
@@ -464,11 +497,15 @@ def display_codes(codes, indv_stem_plots=True,
     code_inds = np.arange(code_size)
   else:
     max_data_pt_per_fig = 1000
-  num_code_figs = int(np.ceil(num_codes / max_data_pt_per_fig))
-  if num_code_figs > 1:
-    data_pt_per_fig = max_data_pt_per_fig
+  if data_pt_per_fig is not None and data_pt_per_fig <= max_data_pt_per_fig:
+    num_code_figs = int(np.ceil(num_codes / data_pt_per_fig))
   else:
-    data_pt_per_fig = num_codes
+    num_code_figs = int(np.ceil(num_codes / max_data_pt_per_fig))
+    if num_code_figs > 1:
+      data_pt_per_fig = max_data_pt_per_fig
+    else:
+      if data_pt_per_fig is None:
+        data_pt_per_fig = num_codes
 
   dpt_idx = 0
   code_figs = []
@@ -476,9 +513,17 @@ def display_codes(codes, indv_stem_plots=True,
     if indv_stem_plots:
       fig = plt.figure(figsize=(10, 10))
       if input_and_recon is not None:
+        if data_pt_per_fig > 10:
+          wr = [20, 1, 1]
+          hspc = 0.1
+          ylbsz=5
+        else:
+          wr = [20, 2, 2]
+          hspc = 0.6
+          ylbsz=7
         gridspec = fig.add_gridspec(ncols=3, nrows=data_pt_per_fig,
-            width_ratios=[20, 1, 1], height_ratios=[1]*data_pt_per_fig,
-            hspace=0.1, wspace=0.1)
+            width_ratios=wr, height_ratios=[1]*data_pt_per_fig,
+            hspace=hspc, wspace=0.1)
       else:
         gridspec = fig.add_gridspec(ncols=1, nrows=data_pt_per_fig,
             width_ratios=[1], height_ratios=[1]*data_pt_per_fig, hspace=1)
@@ -489,6 +534,9 @@ def display_codes(codes, indv_stem_plots=True,
     fig.suptitle(plot_title + ', fig {} of {}'.format(
                  in_code_fig_idx+1, num_code_figs), fontsize=15)
     fig_dpt_idx = dpt_idx % data_pt_per_fig
+
+    max_code_val = np.max(codes[dpt_idx:(dpt_idx+data_pt_per_fig)])
+    min_code_val = np.min(codes[dpt_idx:(dpt_idx+data_pt_per_fig)])
     while fig_dpt_idx < data_pt_per_fig and dpt_idx < num_codes:
       if indv_stem_plots:
         if dpt_idx % 50 == 0:
@@ -500,22 +548,25 @@ def display_codes(codes, indv_stem_plots=True,
         plt.setp(stemlines, 'color', tab10colors[0])
         plt.setp(baseline, 'color', 'k')
         plt.setp(baseline, 'linewidth', 0.25)
-        ax.text(0.01, 0.75, 'L0: {:.2f}, L1: {:.1f}'.format(
+        ax.text(0.01, 0.75, 'L0: {:.4f}, L1: {:.1f}'.format(
           np.sum(codes[dpt_idx, :] != 0) / code_size,
           np.sum(np.abs(codes[dpt_idx, :]))), fontsize=6,
           transform=ax.transAxes, color='g')
+        ax.set_xlim([-2, code_size+1])
+        ylim_mag = max(np.abs(min_code_val), np.abs(max_code_val))
+        ax.set_ylim([-ylim_mag, ylim_mag])
+        ax.set_yticks([-ylim_mag, 0, ylim_mag])
         if fig_dpt_idx < data_pt_per_fig - 1:
           ax.set_xticks([])
         else:
           ax.set_xticks([code_size//2, code_size-1])
-        ax.tick_params(axis='y', which='major', labelsize=5)
-        ax.tick_params(axis='y', which='minor', labelsize=4)
+        ax.tick_params(axis='y', which='major', labelsize=ylbsz)
+        ax.tick_params(axis='y', which='minor', labelsize=ylbsz)
         ax.yaxis.get_offset_text().set_size(5)
         ax.tick_params(axis='x', which='major', labelsize=12)
         ax.tick_params(axis='x', which='minor', labelsize=10)
         ax.spines['top'].set_visible(False)
         ax.spines['right'].set_visible(False)
-        ax.set_xlim([-2, code_size+1])
         if input_and_recon is not None:
           ax = fig.add_subplot(gridspec[fig_dpt_idx, 1])
           ax.imshow(input_and_recon['input'][dpt_idx], cmap='gray',
