@@ -10,9 +10,10 @@ import torch
 from utils.convolutions import code_dim_from_padded_img_dim
 from utils.convolutions import create_mask
 
-def run(images_prepadded, dictionary, kernel_stride, padding_dims,
+def run(images_padded, dictionary, kernel_stride, padding_dims,
         sparsity_weight, num_iters, initial_codes=None,
-        early_stopping_epsilon=None, nonnegative_only=False):
+        early_stopping_epsilon=None, nonnegative_only=False,
+        hard_threshold=False):
   """
   Runs steps of Fast Iterative Shrinkage/Thresholding with a constant stepsize
 
@@ -23,26 +24,17 @@ def run(images_prepadded, dictionary, kernel_stride, padding_dims,
   samples) seems to overpower the savings. Further optimization may be
   possible.
 
-  The index order convention we use is slightly different from the case of
-  fully-connected sparse coding. In the case of fc sparse coding we take the
-  sample axis to be the last axis because this is cleaner and more
-  closely follows the way the math is usually written. In the case of
-  convolutional sparse coding the sample axis is the first axis, because this
-  more closely follows the typical PyTorch convention and makes the code
-  cleaner. The two can be massaged to use the same convention but I think it
-  is more clear to keep the fully-connected and convolutional conventions
-  separate.
-
   To deal with boundary effects when we do convolution with overlapping
-  kernels, the images are prepadded. The reconstruction error in this padded
-  region is ignored via multiplication with a simple mask. Reconstructed images
-  will include the padded region, but the user should strip away this when
-  measuring reconstruction accuracy. This is a simple, clean, and effective
-  way to deal with the boundary effects inherent in using convolutions.
+  kernels, the images are alreaddy padded. The reconstruction error in this
+  padded region is ignored via multiplication with a simple mask. Reconstructed
+  images will include the padded region, but the user should strip away this
+  when measuring reconstruction accuracy. This is a simple, clean, and
+  effective way to deal with the boundary effects inherent in using
+  convolutions.
 
   Parameters
   ----------
-  images_prepadded : torch.Tensor(float32, size=(b, c, h, w))
+  images_padded : torch.Tensor(float32, size=(b, c, h, w))
       A batch of images that we want to find the CONVOLUTIONAL sparse code
       for. b is the number of images. c is the number of image channels, h is
       the (padded) height of the image, while w is the (padded) width.
@@ -56,7 +48,7 @@ def run(images_prepadded, dictionary, kernel_stride, padding_dims,
       The stride of the kernels in the vertical direction is kernel_stride[0]
       whereas stride in the horizontal direction is kernel_stride[1]
   padding_dims : tuple(tuple(int, int), tuple(int, int))
-      The amount of padding that was done to the images -- is used to determine
+      The amount of padding that was done to the images--is used to determine
       the mask. padding_dims[0] is vertical padding and padding_dims[1] is
       horizontal padding. The first component of each of these is the leading
       padding while the second component is the trailing padding.
@@ -64,7 +56,7 @@ def run(images_prepadded, dictionary, kernel_stride, padding_dims,
       This is the weight on the sparsity cost term in the sparse coding cost
       function. It is often denoted as \lambda
   num_iters : int
-      Number of steps of ISTA to run.
+      Number of steps of FISTA to run.
   initial_codes : torch.Tensor(float32, size=(b, s, sh, sw)), optional
       Start with these initial values when computing the codes. b is the number
       of images. s is the number of basis functions, the number of channels in
@@ -80,6 +72,9 @@ def run(images_prepadded, dictionary, kernel_stride, padding_dims,
       left half of the ISTA thresholding function and it becomes a
       shifted RELU function. The amount of the shift from a generic RELU is
       precisely the sparsity_weight. Default False
+  hard_threshold : bool, optional
+      The hard thresholding function is the identity outside of the zeroed
+      region. Default False.
 
   Returns
   -------
@@ -109,20 +104,20 @@ def run(images_prepadded, dictionary, kernel_stride, padding_dims,
   stepsize = 1. / lipschitz_constant
 
   code_height = code_dim_from_padded_img_dim(
-      images_prepadded.shape[2], dictionary.shape[2], kernel_stride[0])
+      images_padded.shape[2], dictionary.shape[2], kernel_stride[0])
   code_width = code_dim_from_padded_img_dim(
-      images_prepadded.shape[3], dictionary.shape[3], kernel_stride[1])
+      images_padded.shape[3], dictionary.shape[3], kernel_stride[1])
   if initial_codes is None:
-    codes = images_prepadded.new_zeros((
-      images_prepadded.shape[0], dictionary.shape[0], code_height, code_width))
+    codes = images_padded.new_zeros((
+      images_padded.shape[0], dictionary.shape[0], code_height, code_width))
   else:
     # warm restart, we'll begin with these values
-    assert initial_codes.shape[0] == images_prepadded.shape[0]
+    assert initial_codes.shape[0] == images_padded.shape[0]
     assert initial_codes.shape[1] == dictionary.shape[0]
     assert initial_codes.shape[2] == code_height
     assert initial_codes.shape[3] == code_width
     codes = initial_codes
-  reconstruction_mask = create_mask(images_prepadded, padding_dims)
+  reconstruction_mask = create_mask(images_padded, padding_dims)
   aux_points = torch.zeros_like(codes).copy_(codes)
   # ^the twist in FISTA is that we compute a proximal update using a set of
   #  auxilliary points.
@@ -142,15 +137,21 @@ def run(images_prepadded, dictionary, kernel_stride, padding_dims,
     # weird semantics conv is conv_transpose2d and corr is conv2d...
     codes = aux_points - stepsize * torch.nn.functional.conv2d(
         reconstruction_mask * (torch.nn.functional.conv_transpose2d(
-          aux_points, dictionary, stride=kernel_stride) - images_prepadded),
+          aux_points, dictionary, stride=kernel_stride) - images_padded),
       dictionary, stride=kernel_stride)
-    if nonnegative_only:
-      codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+    if hard_threshold:
+      if nonnegative_only:
+        codes[codes < (sparsity_weight*stepsize)] = 0
+      else:
+        codes[torch.abs(codes) < (sparsity_weight*stepsize)] = 0
     else:
-      pre_threshold_sign = torch.sign(codes)
-      codes.abs_()
-      codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
-      codes.mul_(pre_threshold_sign)
+      if nonnegative_only:
+        codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+      else:
+        pre_threshold_sign = torch.sign(codes)
+        codes.abs_()
+        codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+        codes.mul_(pre_threshold_sign)
     ###### Proximal step #######
     t_kplusone = (1 + (1 + (4 * t_k**2))**0.5) / 2
     beta_kplusone = (t_k - 1) / t_kplusone

@@ -56,16 +56,7 @@ def run(images, dictionary, codes, group_assignments,
       If true, we normalize each dictionary element to have l2 norm equal to 1
       before we return. Default True.
   """
-  if alignment_penalty == 0:
-    # for speed. Remove this
-    for iter_idx in range(num_iters):
-      dict_update = stepsize * (torch.mm(
-        codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0))
-      dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
-      dictionary.sub_(dict_update)
-      if normalize_dictionary:
-        dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])
-  else:
+  if alignment_penalty != 0:
     accum_regularization_gradients = dictionary.new_zeros(dictionary.size())
     for iter_idx in range(num_iters):
       # compute regularization gradients first. We accumulate gradients from
@@ -82,6 +73,15 @@ def run(images, dictionary, codes, group_assignments,
         alignment_penalty * accum_regularization_gradients)
       # ^first term is the gradient of the reconstruction error, the second term
       #  is the (already computed) gradient of the alignment regularization
+      dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
+      dictionary.sub_(dict_update)
+      if normalize_dictionary:
+        dictionary.div_(dictionary.norm(p=2, dim=1)[:, None])
+  else:
+    # just vanilla sc_cheap_quadratic_descent, no ext. bookkeeping (and faster)
+    for iter_idx in range(num_iters):
+      dict_update = stepsize * (torch.mm(
+        codes.t(), torch.mm(codes, dictionary) - images) / codes.size(0))
       dict_update.div_(hessian_diagonal[:, None] + lowest_code_val)
       dictionary.sub_(dict_update)
       if normalize_dictionary:

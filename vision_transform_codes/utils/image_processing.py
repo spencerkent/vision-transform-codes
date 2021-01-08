@@ -99,7 +99,7 @@ def get_low_pass_filter(DFT_num_samples, filter_parameters,
       ** elif...
   norm_and_threshold : bool
       If true, make sure the maximum magnitude of the transfer function is 1.0
-      and threshold any values below 1e-5
+      and threshold any values below 1e-3
 
   Returns
   -------
@@ -141,6 +141,9 @@ def get_whitening_ramp_filter(DFT_num_samples, norm_and_threshold=True):
   ----------
   DFT_num_samples : (int, int)
       The number of samples in the DFT vertical ax and the DFT horizontal ax
+  norm_and_threshold : bool, optional.
+      If true, make sure the maximum magnitude of the transfer function is 1.0
+      and threshold any values below 1e-5. Default True
 
   Returns
   -------
@@ -180,9 +183,16 @@ def whiten_center_surround(image, cutoffs, return_filter=False,
   ----------
   image : ndarray(float32 or uint8, size=(h, w, c))
       An image of height h and width w, with c color channels
+  cutoffs : dictionary
+      'low' : The low-end cutoff of the whitening filter, clip attenuation
+              below this value. These spatial frequencies are what get through.
+      'high' : The upper cutoff of the lowpass filter
   return_filter : bool, optional
       If true, also return the DFT of the used filter. Just for unwhitening,
       visualization, and debugging purposes. Default False.
+  norm_and_threshold : bool, optional.
+      If true, make sure the maximum magnitude of the transfer function is 1.0
+      and threshold any values below 1e-3. Default True
   """
   assert image.dtype in ['float32', 'uint8']
   lpf = get_low_pass_filter(image.shape,

@@ -8,7 +8,7 @@ import torch
 
 def run(images, dictionary, sparsity_weight, num_iters,
         initial_codes=None, early_stopping_epsilon=None,
-        nonnegative_only=False):
+        nonnegative_only=False, hard_threshold=False):
   """
   Runs steps of Iterative Shrinkage/Thresholding with a constant stepsize
 
@@ -43,6 +43,9 @@ def run(images, dictionary, sparsity_weight, num_iters,
       left half of the ISTA thresholding function and it becomes a
       shifted RELU function. The amount of the shift from a generic RELU is
       the sparsity_weight times the (inferred) stepsize. Default False.
+  hard_threshold : bool, optional
+      The hard thresholding function is the identity outside of the zeroed
+      region. Default False.
 
   Returns
   -------
@@ -83,15 +86,21 @@ def run(images, dictionary, sparsity_weight, num_iters,
     # gradient of l2 term is <(<codes, dictionary> - images), dictionary.T>
     codes.sub_(stepsize * torch.mm(torch.mm(codes, dictionary) - images,
                                    dictionary.t()))
-    if nonnegative_only:
-      codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
-      #^ shifted rectified linear activation
+    if hard_threshold:
+      if nonnegative_only:
+        codes[codes < (sparsity_weight*stepsize)] = 0
+      else:
+        codes[torch.abs(codes) < (sparsity_weight*stepsize)] = 0
     else:
-      pre_threshold_sign = torch.sign(codes)
-      codes.abs_()
-      codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
-      codes.mul_(pre_threshold_sign)
-      #^ now contains the "soft thresholded" (non-rectified) output
+      if nonnegative_only:
+        codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+        #^ shifted rectified linear activation
+      else:
+        pre_threshold_sign = torch.sign(codes)
+        codes.abs_()
+        codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
+        codes.mul_(pre_threshold_sign)
+        #^ now contains the "soft thresholded" (non-rectified) output
     ###### Proximal step #######
 
     if early_stopping_epsilon is not None:

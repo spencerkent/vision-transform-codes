@@ -1,7 +1,6 @@
 """
 Some simple utilities for plotting our transform codes
 """
-
 import bisect
 import numpy as np
 from scipy.stats import kurtosis
@@ -16,6 +15,18 @@ blue_red = plt.get_cmap('RdBu_r')
 
 
 def compute_pSNR(target, reconstruction, manual_sig_mag=None):
+  """
+  Parameters
+  ----------
+  target : ndarray
+      A target tensor
+  reconstruction : ndarray
+      The resconstruction of target (with error)
+  manual_sig_mag : float, optional
+      The minimum and maximum value for a family of signals from which target
+      is drawn. Sets a reference for how big the mean squared error actually
+      is. If not provided, estimated from the target signal itself.
+  """
   if manual_sig_mag is None:
     signal_magnitude = np.max(target) - np.min(target)
   else:
@@ -29,6 +40,20 @@ def compute_pSNR(target, reconstruction, manual_sig_mag=None):
 
 
 def compute_ssim(target, reconstruction, manual_sig_mag=None):
+  """
+  Note: may need to be updated for skimage > 0.15
+
+  Parameters
+  ----------
+  target : ndarray
+      A target tensor
+  reconstruction : ndarray
+      The resconstruction of target (with error)
+  manual_sig_mag : float, optional
+      The minimum and maximum value for a family of signals from which target
+      is drawn. Sets a reference for how big the error actually
+      is. If not provided, estimated from the target signal itself.
+  """
   if manual_sig_mag is None:
     signal_magnitude = np.max(target) - np.min(target)
   else:
@@ -58,7 +83,8 @@ def standardize_for_imshow(image):
   ----------
   image : ndarray
       The image to be standardized, can be (h, w) or (h, w, c). All operations
-      are scalar operations applied to every color channel.
+      are scalar operations applied to every color channel. Note this, may
+      change hue of color images, I think.
 
   Returns
   -------
@@ -148,13 +174,13 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
       A list containing pyplot figures. Can be saved separately, or whatever
       from the calling function
   """
-  if groupings is not None:
-    t_ims = get_dictionary_tile_imgs_arr_by_group(dictionary, groupings,
-        indv_renorm=renormalize, reshape_to_these_dims=reshaping,
-        highlights=highlighting)
-  else:
+  if groupings is None:
     t_ims, raw_val_mapping, lab_w_pix_coords = get_dictionary_tile_imgs(
         dictionary, reshape_to_these_dims=reshaping, indv_renorm=renormalize,
+        highlights=highlighting)
+  else:
+    t_ims = get_dictionary_tile_imgs_arr_by_group(dictionary, groupings,
+        indv_renorm=renormalize, reshape_to_these_dims=reshaping,
         highlights=highlighting)
   fig_refs = []
   for fig_idx in range(len(t_ims)):
@@ -376,6 +402,7 @@ def get_dictionary_tile_imgs_arr_by_group(dictionary, groups,
       RGB images to be displayed by imshow, Currently this will just be length
       1, but I will add support for multiple images later
   """
+  # TODO: Test this more.
   #TODO: add the ability to split up into multiple (meta) tile images,
   #      like we do in the above function.
 
@@ -480,6 +507,9 @@ def display_codes(codes, indv_stem_plots=True,
       'recon' : ndarray(same dims as 'input')
         The corresponding reconstruction from the transform code
       'vrange' : the imshow value range on which to display these.
+  data_pt_per_fig : int, optional
+      The number of codes to display per figure, helpful for keeping stem plots
+      from getting too small. Default None (all on one fig).
   plot_title : str, optional
       The title of the plot. Default ""
 

@@ -9,7 +9,7 @@ import torch
 
 from utils.convolutions import create_mask
 
-def run(images_prepadded, dictionary, codes, kernel_stride, padding_dims,
+def run(images_padded, dictionary, codes, kernel_stride, padding_dims,
         stepsize=0.001, num_iters=1, normalize_dictionary=True):
   """
   Runs num_iters steps of SC steepest descent on the dictionary elements
@@ -19,7 +19,7 @@ def run(images_prepadded, dictionary, codes, kernel_stride, padding_dims,
 
   Parameters
   ----------
-  images_prepadded : torch.Tensor(float32, size=(b, c, h, w))
+  images_padded : torch.Tensor(float32, size=(b, c, h, w))
       A batch of images that we want to find the CONVOLUTIONAL sparse code
       for. b is the number of images. c is the number of image channels, h is
       the (padded) height of the image, while w is the (padded) width.
@@ -51,7 +51,7 @@ def run(images_prepadded, dictionary, codes, kernel_stride, padding_dims,
       If true, we normalize each dictionary element to have l2 norm equal to 1
       before we return. Default True.
   """
-  reconstruction_mask = create_mask(images_prepadded, padding_dims)
+  reconstruction_mask = create_mask(images_padded, padding_dims)
   codes_temp_transposed = codes.transpose(dim0=1, dim1=0)
   # TODO: Figure out if I can remove the double-transpose in gradient comp
   for iter_idx in range(num_iters):
@@ -60,9 +60,9 @@ def run(images_prepadded, dictionary, codes, kernel_stride, padding_dims,
     gradient = (torch.nn.functional.conv2d(
       (reconstruction_mask * (
         torch.nn.functional.conv_transpose2d(codes, dictionary,
-          stride=kernel_stride) - images_prepadded)).transpose(dim0=1, dim1=0),
+          stride=kernel_stride) - images_padded)).transpose(dim0=1, dim1=0),
       codes_temp_transposed, dilation=kernel_stride) /
-      images_prepadded.shape[0]).transpose(dim0=1, dim1=0)
+      images_padded.shape[0]).transpose(dim0=1, dim1=0)
     # it makes sense to put this update on the same scale as the dictionary
     # so that stepsize is effectively dimensionless
     gradient.mul_(dictionary.norm(p=2) / gradient.norm(p=2))

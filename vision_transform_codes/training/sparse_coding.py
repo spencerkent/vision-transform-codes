@@ -122,6 +122,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   # I realize there's a fair amount of variable scope flying around here, but
   # for now I think this is the best way to limit the verbosity of the trainer
   def infer_codes(batch_images):
+    """Infers sparse codes for a batch of images"""
     inf_alg_inputs = {
         'dictionary': dictionary, 'sparsity_weight': sparsity_weight,
         'num_iters': inf_num_iters, 'nonnegative_only': nonneg_only,
@@ -129,21 +130,22 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     if coding_mode == 'fully-connected':
       inf_alg_inputs.update({'images': batch_images})
     else:
-      inf_alg_inputs.update({'images_prepadded': batch_images,
+      inf_alg_inputs.update({'images_padded': batch_images,
         'kernel_stride': kernel_strides, 'padding_dims': image_padding})
     if code_inf_alg in ['subspace_ista', 'subspace_fista']:
       inf_alg_inputs.update({'group_assignments': group_assignments})
-      inf_alg_inputs.pop('nonnegative_only')
+      inf_alg_inputs.pop('nonnegative_only')  # these vers. always nonnegative
     batch_codes = inference_alg.run(**inf_alg_inputs)
     return batch_codes
 
   def update_dictionary(batch_images, batch_codes):
+    """Updates the dictionary based on a batch of sparse codes"""
     dict_upd_alg_inputs = {'dictionary': dictionary, 'codes': batch_codes,
       'stepsize': d_upd_stp, 'num_iters': d_upd_niters}
     if coding_mode == 'fully-connected':
       dict_upd_alg_inputs.update({'images': batch_images})
     else:
-      dict_upd_alg_inputs.update({'images_prepadded': batch_images,
+      dict_upd_alg_inputs.update({'images_padded': batch_images,
         'kernel_stride': kernel_strides, 'padding_dims': image_padding})
     if dict_update_alg in ['sc_cheap_quadratic_descent',
                            'subspace_sc_cheap_quadratic_descent']:
@@ -165,12 +167,14 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     dict_update.run(**dict_upd_alg_inputs)
 
   def save_checkpoint(where_to_save):
+    """Checkpoints the current dictionary to disk"""
     # In lieu of the torch-specific saver torch.save, we'll just use
     # pythons's standard serialization tool, pickle. That way we can mess
     # with the results without needing PyTorch.
     pickle.dump(dictionary.cpu().numpy(), open(where_to_save, 'wb'))
 
   def compute_metrics(batch_images, batch_codes):
+    """These metrics can be used to assess how training is progressing"""
     metrics = {}
     batch_images_np = batch_images.cpu().numpy()
     if coding_mode == 'fully-connected':
@@ -224,11 +228,13 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     return metrics
 
   def send_metrics_to_tensorboard(dict_of_metrics):
+    """Used in tensorboard visualization of training progress"""
     for metric in dict_of_metrics:
       tb_summary_writer.add_scalar(
           metric, dict_of_metrics[metric], total_iter_idx)
 
   def send_dict_viz_to_tensorboard():
+    """Writes a image summary to tensorboard for nice visualization of dict"""
     # Tensorboard doesn't give you a lot of control for how images look so
     # I'm going to generate my own pyplot figures and save these as images.
     # There's probably a more elegant way to do this, but it works for now...
@@ -254,6 +260,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     del tiled_kernel_figs
 
   def write_pyplot_to_tb_image(plt_fig, img_caption):
+    """This is the sort of hacky way we get pyplot figures saved to TB"""
     buf = io.BytesIO()
     plt_fig.savefig(buf, format='png')
     plt.close(plt_fig)
@@ -368,7 +375,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     print_interval = all_params['stdout_print_interval']
   else:
     print_interval = 1000
-  if 'dict_element_rp_schedule' in all_params:
+  if 'dict_element_rp_schedule' in all_params:  # {r}eset or {p}rune schedule
     dict_element_rp_schedule = all_params['dict_element_rp_schedule']
   else:
     dict_element_rp_schedule = None
@@ -450,13 +457,15 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
               'seconds')
         print('-----')
 
+      # setting parameters of inference and dictionary update
       if total_iter_idx in inf_param_schedule:
         sparsity_weight = inf_param_schedule[total_iter_idx]['sparsity_weight']
         inf_num_iters = inf_param_schedule[total_iter_idx]['num_iters']
       if total_iter_idx in dict_update_param_schedule:
         d_upd_stp= dict_update_param_schedule[total_iter_idx]['stepsize']
         d_upd_niters = dict_update_param_schedule[total_iter_idx]['num_iters']
-      if (dict_element_rp_schedule is not None and  #{r}eset or {p}rune
+      # {r}eseting or {p}runing dictionary elements, if necessary
+      if (dict_element_rp_schedule is not None and
           total_iter_idx in dict_element_rp_schedule):
         f_type = dict_element_rp_schedule[total_iter_idx]['filter_type']
         f_params = dict_element_rp_schedule[total_iter_idx]['filter_params']
@@ -464,7 +473,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
                          'coding_mode': coding_mode})
         rp_action = dict_element_rp_schedule[total_iter_idx]['action']
         # at least one of the reset-or-prune modes requires an estimate
-        # of the code distribution -- we'll use the validation dataset for this
+        # of the code distribution--we'll use the validation dataset for this
         v_codes = []
         for v_batch_images in validation_image_dataset:
           if dictionary.device != v_batch_images.device:
@@ -480,11 +489,13 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
             inds = torch.ones(dictionary.size(0), dtype=torch.bool)
             inds[affected_elems] = False
             hessian_diag = hessian_diag[inds]
-        # TODO: WARNING: doesn't yet work for pruning. (have to update element inds)
-
+          # TODO: WARNING: doesn't yet work for subspaces.
+          # (have to update group element inds)
+      # checkpointing the dictionary
       if (ckpt_sched is not None and total_iter_idx in ckpt_sched):
         save_checkpoint(logging_path /
             ('checkpoint_dictionary_iter_' + str(total_iter_idx)))
+      # writing a training visualization log
       if (trn_vis_sched is not None and total_iter_idx in trn_vis_sched):
         val_metrics = []
         for v_batch_images in validation_image_dataset:
@@ -496,6 +507,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
           for y in range(len(val_metrics))]) for x in val_metrics[0]})
         send_dict_viz_to_tensorboard()
 
+      # this is what gets executed every loop--code inference followed by
+      # dictionary update
       if dictionary.device != t_batch_images.device:
         t_batch_images = t_batch_images.to(dictionary.device)
       t_codes = infer_codes(t_batch_images)
@@ -514,6 +527,34 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
 
   I'm defining this outside the train_dictionary() function because it's fairly
   self-contained and otherwise would be an annoyingly long helper function
+
+  Parameters
+  ----------
+  dictionary : see docstring for train_dictionary
+  codes : see docstring for train_dictionary
+  filter_type : string
+      One of {'random', 'cosine_sim_threshold', 'nonuniformity_within_group'}
+      'cosine_sim_threshold' looks for pairs of dictionary elements whose
+      cosine similarity is below a threshold (either selected by user at
+      runtime provided by the filter_parameters input).
+      'nonuniformity_within_group' estimates the degree of uniformity for the
+      density of grouped code phases. Will flag groups which don't uniformly
+      file the hypersphere. 'random' is self explanatory.
+  filter_params : dictionary
+      'coding_mode' : one of {'fully-connected', 'convolutional'}
+      'group_assignments' : see docstring for train_dictionary. Can be None.
+      ... IF filter_type == 'random' ...
+      'num_to_modify' : int. The number of dictionary elements to randomly mod
+      ... IF filter_type == 'cosine_sim_threshold' ...
+      'cue_user' : bool. Ask the user what the threshold should be (pop up)
+      'only_sim_within_group' : bool. Only compute cosine sim within group
+      ... IF filter_type == 'cosine_sim_threshold' AND 'cue_user' == False...
+      'threshold' : float. The threshold of cosine similarity to use
+      ... IF filter_type == 'nonuniformity_within_group' ...
+      'num_gc_in_average' : int. Number of great circles to use for estimating
+        uniformity
+  action : str
+      One of {'reset', 'prune'}. Pretty self-explanatory
   """
   import numpy as np
   from matplotlib import pyplot as plt
@@ -543,6 +584,7 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
               new_group.append(de_idx)
           groups[g_idx] = new_group
       return dictionary, modify_these
+
     elif filter_type == 'cosine_sim_threshold':
       # reset element that are too close in cosine similarity to other elements
       if filter_params['cue_user']:
@@ -590,7 +632,8 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
           cos_sims = (torch.mm(dictionary[groups[g_idx]],
                                dictionary[groups[g_idx]].t()) /
                       torch.mm(norms, norms.t())).cpu().numpy()
-          problem_pairs = np.argwhere(np.abs(np.triu(cos_sims, k=1)) > csim_threshold)
+          problem_pairs = np.argwhere(np.abs(np.triu(cos_sims, k=1)) > 
+                                      csim_threshold)
           temp_mt = []
           for pair in problem_pairs:
             if pair[0] not in temp_mt and pair[1] not in temp_mt:
@@ -598,7 +641,8 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
           if len(temp_mt) > 0:
             print('Action ', action, 'applied to ', temp_mt, 'in group', g_idx)
             if action == 'reset':
-              average_norm = torch.mean(dictionary[groups[g_idx]].norm(p=2, dim=1))
+              average_norm = torch.mean(
+                  dictionary[groups[g_idx]].norm(p=2, dim=1))
               noise = torch.randn((len(temp_mt), dictionary.shape[1]),
                                   device=dictionary.device)
               noise.mul_(average_norm / noise.norm(p=2, dim=1)[:, None])
@@ -618,7 +662,8 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
                   new_group.append(de_idx)
               groups[g_idx] = new_group
         return dictionary, modify_these
-      else:
+
+      else:  # not restricted to groups
         norms = torch.norm(dictionary, p=2, dim=1, keepdim=True)
         cos_sims = (torch.mm(dictionary, dictionary.t()) /
                     torch.mm(norms, norms.t())).cpu().numpy()
@@ -647,6 +692,7 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
                   new_group.append(de_idx)
               groups[g_idx] = new_group
         return dictionary, modify_these
+
     elif filter_type == 'nonuniformity_within_group':
       # identify groups that are outliers in the degree to which nonzero
       # activations are nonuniformly distributed within the group.

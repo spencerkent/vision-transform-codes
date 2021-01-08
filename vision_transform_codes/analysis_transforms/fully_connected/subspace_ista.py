@@ -16,7 +16,7 @@ For more context, see the following references:
 import torch
 
 def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
-        initial_codes=None, early_stopping_epsilon=None):
+        initial_codes=None, early_stopping_epsilon=None, hard_threshold=False):
   """
   Runs steps of subspace Iterative Shrinkage/Thresholding.
 
@@ -52,6 +52,9 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
       Terminate if code changes by less than this amount per component,
       normalized by stepsize. Beware, requires some overhead computation.
       Default None.
+  hard_threshold : bool, optional
+      The hard thresholding function is the identity outside of the zeroed
+      region. Default False.
 
   Returns
   -------
@@ -79,8 +82,9 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
     l_idx = g_idx * max_group_size
     h_idx = l_idx + len(group_assignments[g_idx])
     grouped_dictionary[l_idx:h_idx] = dictionary[group_assignments[g_idx]]
-  # Now compute a upper bound on the Hessian, as we do in ISTA, but using this
-  # new grouped dictionary.
+  # Now compute a upper bound on the Hessian, as we do in ISTA/FISTA, but using
+  # this new grouped dictionary. TODO: verify this is the correct thing to
+  # do for the subspace variant.
   try:
     lipschitz_constant = torch.symeig(
         torch.mm(grouped_dictionary.t(), grouped_dictionary))[0][-1]
@@ -110,8 +114,11 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
     group_norms = torch.norm(grouped_codes_tensor, p=2, dim=2, keepdim=True)
     group_norms[group_norms == 0] = 1.0  # avoid divide by zero
     # now theshold the group norms. See [1] and [2].
-    grouped_codes_tensor.mul_(
-        torch.clamp(1 - (sparsity_weight * stepsize / group_norms), min=0.))
+    if hard_threshold:
+      raise NotImplementedError('TODO')
+    else:
+      grouped_codes_tensor.mul_(
+          torch.clamp(1 - (sparsity_weight * stepsize / group_norms), min=0.))
 
     if early_stopping_epsilon is not None:
       avg_per_component_delta = torch.mean(torch.abs(

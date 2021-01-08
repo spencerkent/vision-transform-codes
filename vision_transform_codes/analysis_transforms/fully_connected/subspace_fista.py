@@ -3,7 +3,9 @@ Subspace Fast Iterative Shrinkage/Thresholding for fc sparse inference
 
 This inference algorithm applies a thresholding operation to the *norm* of a
 group of coefficients. In the case where each group is of size 1, it reduces
-to vanilla FISTA.
+to vanilla FISTA. This implementation is currently about an order of
+magnitude slower than vanilla FISTA, I should investigate how to make it more
+efficient.
 
 For more context, see the following references:
 .. [1] Yuan, M. & Lin, Y. (2006) Model selection and estimation in regression
@@ -16,7 +18,7 @@ For more context, see the following references:
 import torch
 
 def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
-        initial_codes=None, early_stopping_epsilon=None):
+        initial_codes=None, early_stopping_epsilon=None, hard_threshold=False):
   """
   Runs steps of subspace Fast Iterative Shrinkage/Thresholding.
 
@@ -52,6 +54,9 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
       Terminate if code changes by less than this amount per component,
       normalized by stepsize. Beware, requires some overhead computation.
       Default None.
+  hard_threshold : bool, optional
+      The hard thresholding function is the identity outside of the zeroed
+      region. Default False.
 
   Returns
   -------
@@ -65,8 +70,6 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
   max_group_size = max([len(x) for x in group_assignments])
   grouped_codes_tensor_aux = images.new_zeros(
       images.size(0), len(group_assignments), max_group_size)
-  # ^the twist in FISTA is that we compute a proximal update using a set of
-  #  auxilliary points.
   if initial_codes is not None:
     # warm restart, we'll begin with these values
     for g_idx in range(len(group_assignments)):
@@ -81,8 +84,9 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
     l_idx = g_idx * max_group_size
     h_idx = l_idx + len(group_assignments[g_idx])
     grouped_dictionary[l_idx:h_idx] = dictionary[group_assignments[g_idx]]
-  # Now compute a upper bound on the Hessian, as we do in ISTA, but using this
-  # new grouped dictionary.
+  # Now compute a upper bound on the Hessian, as we do in ISTA/FISTA, but using
+  # this new grouped dictionary. TODO: verify this is the correct thing to
+  # do for the subspace variant.
   try:
     lipschitz_constant = torch.symeig(
         torch.mm(grouped_dictionary.t(), grouped_dictionary))[0][-1]
@@ -115,8 +119,11 @@ def run(images, dictionary, group_assignments, sparsity_weight, num_iters,
     group_norms = torch.norm(grouped_codes_tensor, p=2, dim=2, keepdim=True)
     group_norms[group_norms == 0] = 1.0  # avoid divide by zero
     # now theshold the group norms. See [1] and [2].
-    grouped_codes_tensor.mul_(
-        torch.clamp(1 - (sparsity_weight * stepsize / group_norms), min=0.))
+    if hard_threshold:
+      raise NotImplementedError('TODO')
+    else:
+      grouped_codes_tensor.mul_(
+          torch.clamp(1 - (sparsity_weight * stepsize / group_norms), min=0.))
     ###### Subspace proximal step using aux pts #######
     t_kplusone = (1 + (1 + (4 * t_k**2))**0.5) / 2
     beta_kplusone = (t_k - 1) / t_kplusone

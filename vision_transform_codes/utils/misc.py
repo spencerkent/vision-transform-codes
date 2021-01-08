@@ -1,9 +1,10 @@
 """
-Miscellaneous utils that might be useful
+Miscellaneous utils I have found useful
 """
 import os
 import pickle
 import numpy as np
+
 
 def load_newest_dictionary_checkpoint(checkpoint_dir):
   # get the dictionary from the highest checkpoint iteration
@@ -32,7 +33,7 @@ def rotational_average(array_2d, nbins=10, elem_cartesian_coords=None):
   array_2d : ndarray
       The array to be rotationally averaged
   nbins : int, optional
-      We discretize radius into this many bins. Default 10
+      We discretize radius into this many bins. Default 10.
   elem_cartesian_coords : tuple(ndarray, ndarray)
       The cartesian coordinates to associate with each element in
       array_2d. elem_cartesian_coords[0] are the vertical values and
@@ -43,7 +44,7 @@ def rotational_average(array_2d, nbins=10, elem_cartesian_coords=None):
   Returns
   -------
   rotational_means : ndarray(size=(nbins,))
-      Means across polar angle for the nbins different polar magnitudes
+      Mean across polar angle for the each of the different polar magnitudes
   magnitude_bins : ndarray(size=(nbins,))
       The left edge of each bin.
   """
@@ -62,7 +63,7 @@ def rotational_average(array_2d, nbins=10, elem_cartesian_coords=None):
   polar_mag, polar_phase = cartesian_to_polar(h_coords, v_coords)
   highest_valid_mag = max((np.max(np.abs(h_coords)), np.max(np.abs(v_coords))))
   # ^don't consider magnitudes larger than the largest cartesian
-  #  dimension -- these are in the 'corners'
+  #  dimension--these are in the 'corners'
   discrete_polar_mag = np.linspace(0.0, highest_valid_mag, nbins + 1)
   bin_assignments = np.digitize(polar_mag, discrete_polar_mag) - 1
   bin_assignments[polar_mag == highest_valid_mag] = nbins - 1
@@ -149,4 +150,3 @@ def walk_on_unit_sphere(starting_position, step_angle_radians,
           np.dot(rotation_matrix_2d,
             np.dot(plane_basis.T, steps[:, step_idx-1][:, None]))))
   return steps
-
