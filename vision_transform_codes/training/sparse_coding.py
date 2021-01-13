@@ -319,8 +319,12 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   else:
     renormalize_dictionary = True
   if renormalize_dictionary:
-    assert torch.allclose(init_dictionary.norm(p=2, dim=1),
-                          torch.tensor(1.).to(init_dictionary.device)), (
+    if coding_mode == 'fully-connected':
+      kernel_norms = init_dictionary.norm(p=2, dim=1)
+    else:
+      kernel_norms = init_dictionary.norm(p=2, dim=(1, 2, 3))
+    assert torch.allclose(kernel_norms,
+        torch.ones(init_dictionary.size(0), device=init_dictionary.device)), (
            'Please ensure the initial dictionary is already normalized')
   if 'logging_folder_fullpath' in all_params:
     assert type(all_params['logging_folder_fullpath']) != str, (
@@ -367,10 +371,11 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     yaml.dump(saved_training_params,
               open(logging_path / 'training_params.yaml', 'w'),
               default_flow_style=None)
-    # for good measure, let's just save the entire calling script. We have it
-    # as a string here:
-    with open(logging_path / 'called_script.py', 'w') as saved_script:
-      saved_script.write(all_params['str_entire_calling_script'])
+    if 'str_entire_calling_script' in all_params:
+      # for good measure, let's just save the entire calling script. We have it
+      # as a string here:
+      with open(logging_path / 'called_script.py', 'w') as saved_script:
+        saved_script.write(all_params['str_entire_calling_script'])
   if 'stdout_print_interval' in all_params:
     print_interval = all_params['stdout_print_interval']
   else:
