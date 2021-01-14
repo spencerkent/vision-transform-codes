@@ -135,7 +135,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     if code_inf_alg in ['subspace_ista', 'subspace_fista']:
       inf_alg_inputs.update({'group_assignments': group_assignments})
       inf_alg_inputs.pop('nonnegative_only')  # these vers. always nonnegative
-      inf_alg_inputs.pop('variant')  # not used yet for subspace
+      inf_alg_inputs['variant'] = inf_alg_inputs['variant'][9:]  # prefixed
     batch_codes = inference_alg.run(**inf_alg_inputs)
     return batch_codes
 
@@ -396,12 +396,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
     assert group_assignments is not None
     if coding_mode == 'fully-connected':
-      if code_inf_alg == 'subspace_ista':
-        from analysis_transforms.fully_connected import (
-            subspace_ista as inference_alg)
-      else:
-        from analysis_transforms.fully_connected import (
-            subspace_fista as inference_alg)
+      from analysis_transforms.fully_connected import (
+          subspace_ista_fista as inference_alg)
     else:
       raise KeyError('Havent implemented subspace ISTA for convolutional yet')
   else:
