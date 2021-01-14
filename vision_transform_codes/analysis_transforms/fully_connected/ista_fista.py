@@ -2,17 +2,22 @@
 Iterative Shrinkage/Thresholding for fully-connected sparse inference
 
 What I mean by fully-connected is that the basis functions have the same
-dimensionality as the images.
+dimensionality as the images. Implements both the vanilla and
+accelerated variant (FISTA).
+
+.. [1] Beck, A., & Teboulle, M. (2009). A fast iterative
+       shrinkage-thresholding algorithm for linear inverse problems.
+       SIAM Journal on Imaging Sciences, 2(1), 183–202.
 """
 import torch
 
-def run(images, dictionary, sparsity_weight, num_iters,
+def run(images, dictionary, sparsity_weight, num_iters, variant='fista',
         initial_codes=None, early_stopping_epsilon=None,
         nonnegative_only=False, hard_threshold=False):
   """
   Runs steps of Iterative Shrinkage/Thresholding with a constant stepsize
 
-  Computes ISTA updates on samples in parallel. Written to
+  Computes ISTA/FISTA updates on samples in parallel. Written to
   minimize data copies, for speed. Ideally, one could stop computing updates
   on a sample whose code is no longer changing very much. However, the
   copying overhead this requires (to only update a newer, smaller set of
@@ -31,7 +36,10 @@ def run(images, dictionary, sparsity_weight, num_iters,
       This is the weight on the sparsity cost term in the sparse coding cost
       function. It is often denoted as \lambda
   num_iters : int
-      Number of steps of ISTA to run.
+      Number of steps of ISTA/FISTA to run.
+  variant : str, optional
+      One of {'ista', 'fista'}. Fista is the "accelerated" version of ista.
+      Default 'fista'.
   initial_codes : torch.Tensor(float32, size=(b, s)), optional
       Start with these initial values when computing the codes. Default None.
   early_stopping_epsilon : float, optional
@@ -53,6 +61,7 @@ def run(images, dictionary, sparsity_weight, num_iters,
       The set of codes for this set of images. s is the code size and b in the
       batch size.
   """
+  assert variant in ['ista', 'fista']
   # We can take the stepsize from the largest eigenvalue of the Gram matrix,
   # dictionary @ dictionary.T. We only need to compute this once, here. This
   # guarantees convergence but may be a bit conservative and also could be
@@ -70,22 +79,31 @@ def run(images, dictionary, sparsity_weight, num_iters,
     raise RuntimeError()
   stepsize = 1. / lipschitz_constant
 
+  # The difference between ISTA and FISTA is *where* we calculate the gradient
+  # and make a steepest-descent update. In ISTA this is just the previous
+  # estimate for the codes. In FISTA, we keep a set of auxilliary points which
+  # combine the past two updates. See [1] for a nice description.
   if initial_codes is None:
-    codes = images.new_zeros(images.size(0), dictionary.size(0))
-  else:
-    codes = initial_codes  # warm restart, we'll begin with these values
+    grad_eval_points = images.new_zeros(images.size(0), dictionary.size(0))
+  else:  # warm restart, we'll begin with these values
+    grad_eval_points = initial_codes
 
   if early_stopping_epsilon is not None:
-    old_codes = torch.zeros_like(codes).copy_(codes)
     avg_per_component_delta = float('inf')
+    if variant == 'ista':
+      old_codes = torch.zeros_like(grad_eval_points).copy_(grad_eval_points)
+  if variant == 'fista':
+    old_codes = torch.zeros_like(grad_eval_points).copy_(grad_eval_points)
+    t_kplusone = 1.
   stop_early = False
   iter_idx = 0
   while (iter_idx < num_iters and not stop_early):
+    if variant == 'fista':
+      t_k = t_kplusone
 
-    ###### Proximal step #######
-    # gradient of l2 term is <(<codes, dictionary> - images), dictionary.T>
-    codes.sub_(stepsize * torch.mm(torch.mm(codes, dictionary) - images,
-                                   dictionary.t()))
+    #### Proximal update ####
+    codes = grad_eval_points - stepsize * torch.mm(
+        torch.mm(grad_eval_points, dictionary) - images, dictionary.t())
     if hard_threshold:
       if nonnegative_only:
         codes[codes < (sparsity_weight*stepsize)] = 0
@@ -100,15 +118,30 @@ def run(images, dictionary, sparsity_weight, num_iters,
         codes.abs_()
         codes.sub_(sparsity_weight * stepsize).clamp_(min=0.)
         codes.mul_(pre_threshold_sign)
-        #^ now contains the "soft thresholded" (non-rectified) output
-    ###### Proximal step #######
+        #^ now contains the "soft thresholded" (non-rectified) output x_{k+1}
+
+    if variant == 'fista':
+      t_kplusone = (1 + (1 + (4 * t_k**2))**0.5) / 2
+      beta_kplusone = (t_k - 1) / t_kplusone
+      change_in_codes = codes - old_codes
+      grad_eval_points = codes + beta_kplusone*(change_in_codes)
+      #^ the above two lines are responsible for a ~30% longer per-iteration
+      #  cost for FISTA as opposed to ISTA. For certain problems though, FISTA
+      #  may require many fewer steps to get a solution of similar quality.
+      old_codes.copy_(codes)
+    else:
+      grad_eval_points = codes
 
     if early_stopping_epsilon is not None:
-      avg_per_component_delta = torch.mean(
-          torch.abs(codes - old_codes) / stepsize)
+      if variant == 'fista':
+        avg_per_component_delta = torch.mean(
+            torch.abs(change_in_codes) / stepsize)
+      else:
+        avg_per_component_delta = torch.mean(
+            torch.abs(codes - old_codes) / stepsize)
+        old_codes.copy_(codes)
       stop_early = (avg_per_component_delta < early_stopping_epsilon
                     and iter_idx > 0)
-      old_codes.copy_(codes)
 
     iter_idx += 1
 

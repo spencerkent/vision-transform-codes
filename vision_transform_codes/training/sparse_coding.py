@@ -125,8 +125,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     """Infers sparse codes for a batch of images"""
     inf_alg_inputs = {
         'dictionary': dictionary, 'sparsity_weight': sparsity_weight,
-        'num_iters': inf_num_iters, 'nonnegative_only': nonneg_only,
-        'hard_threshold': hard_threshold}
+        'num_iters': inf_num_iters, 'variant': code_inf_alg,
+        'nonnegative_only': nonneg_only, 'hard_threshold': hard_threshold}
     if coding_mode == 'fully-connected':
       inf_alg_inputs.update({'images': batch_images})
     else:
@@ -135,6 +135,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     if code_inf_alg in ['subspace_ista', 'subspace_fista']:
       inf_alg_inputs.update({'group_assignments': group_assignments})
       inf_alg_inputs.pop('nonnegative_only')  # these vers. always nonnegative
+      inf_alg_inputs.pop('variant')  # not used yet for subspace
     batch_codes = inference_alg.run(**inf_alg_inputs)
     return batch_codes
 
@@ -385,16 +386,13 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   else:
     dict_element_rp_schedule = None
 
-  if code_inf_alg == 'ista':
+  if code_inf_alg in ['ista', 'fista']:
     if coding_mode == 'fully-connected':
-      from analysis_transforms.fully_connected import ista as inference_alg
+      from analysis_transforms.fully_connected import (
+          ista_fista as inference_alg)
     else:
-      from analysis_transforms.convolutional import ista as inference_alg
-  elif code_inf_alg == 'fista':
-    if coding_mode == 'fully-connected':
-      from analysis_transforms.fully_connected import fista as inference_alg
-    else:
-      from analysis_transforms.convolutional import fista as inference_alg
+      from analysis_transforms.convolutional import (
+          ista_fista as inference_alg)
   elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
     assert group_assignments is not None
     if coding_mode == 'fully-connected':

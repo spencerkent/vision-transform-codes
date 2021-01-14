@@ -557,6 +557,7 @@ def display_codes(codes, indv_stem_plots=True,
       else:
         gridspec = fig.add_gridspec(ncols=1, nrows=data_pt_per_fig,
             width_ratios=[1], height_ratios=[1]*data_pt_per_fig, hspace=1)
+        ylbsz=7
     else:
       fig = plt.figure(figsize=(12, 10))
       code_img = np.zeros([data_pt_per_fig, code_size])
