@@ -10,6 +10,8 @@ all_tests = [
     'sparse coding test 4',
     'ista_fista test 1',
     'ista_fista test 2',
+    'ista_fista test 3',
+    'sparse coding test 5',
     ]
 
 # terminal colors
@@ -95,6 +97,22 @@ def main():
     print_failure(all_tests[6])
     print_traceback()
   print_success(all_tests[6])
+
+  print(f'{bcolors.WARNING}  Running {all_tests[7]} {bcolors.ENDC}')
+  try:
+    import ista_fista_3
+  except:
+    print_failure(all_tests[7])
+    print_traceback()
+  print_success(all_tests[7])
+
+  print(f'{bcolors.WARNING}  Running {all_tests[8]} {bcolors.ENDC}')
+  try:
+    import sparse_coding_5
+  except:
+    print_failure(all_tests[8])
+    print_traceback()
+  print_success(all_tests[8])
 
   print(f'{bcolors.OKGREEN}---------------------------------')
   print(f'All tests completed successfully')
