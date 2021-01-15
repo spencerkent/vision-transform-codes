@@ -9,13 +9,18 @@ strategies on images. Just leaving a few relevant references:
        37(23), 3311-3325.
 """
 import numpy as np
+from scipy.signal import convolve
 from scipy.signal import convolve2d
+from scipy.ndimage import convolve1d
 from matplotlib import pyplot as plt
 
 
-def filter_sd(image, filter_spatial):
+def filter_sd(image, filter_spatial, separable_vert=None, separable_horz=None):
   """
   Filters an image using a filter specified in the {s}patial {d}omain
+
+  If the filter is "separable" then we can get a performance boost by doing
+  1d convolutions separately in each axis.
 
   Parameters
   ----------
@@ -25,6 +30,10 @@ def filter_sd(image, filter_spatial):
   filter_spatial : ndarray(float32 or uint8, size=(fh, fw))
       The filter has fh samples in the vertical dimension and fw samples in
       the horizontal dimension
+  separable_vert : ndarray(float32 or uint8, size=(fh,)), optional
+      The corresponding vertical 'factor' of filter_spatial. Default None.
+  separable_horz : ndarray(float32 or uint8, size=(fw,)), optional
+      The corresponding horizontal 'factor' of filter_spatial. Default None.
 
   Returns
   -------
@@ -33,10 +42,21 @@ def filter_sd(image, filter_spatial):
   assert image.dtype in ['float32', 'uint8']
   filtered_image = np.zeros(image.shape, dtype='float32')
   for color_channel in range(image.shape[2]):
-    filtered_image[:, :, color_channel] = convolve2d(
-        image[:, :, color_channel], filter_spatial, 'same', boundary='symm')
-    #^ using the 'symmetric' boundary condition seems to reduce artifacts at
-    #  the image boundary. Worth looking into more closely.
+    if separable_vert is None:
+      filtered_image[:, :, color_channel] = convolve2d(
+          image[:, :, color_channel], filter_spatial, 'same', boundary='symm')
+      #^ using the 'symmetric' boundary condition seems to reduce artifacts at
+      #  the image boundary. Worth looking into more closely.
+    else:
+      # separable filter, we can do this faster
+      for row_idx in range(image.shape[0]):
+        filtered_image[row_idx, :, color_channel] = convolve1d(
+            image[row_idx, :, color_channel], separable_horz,
+            mode='reflect')
+      for col_idx in range(image.shape[1]):
+        filtered_image[:, col_idx, color_channel] = convolve1d(
+            filtered_image[:, col_idx, color_channel], separable_vert,
+            mode='reflect')
   return filtered_image
 
 
@@ -70,6 +90,84 @@ def filter_fd(image, filter_DFT):
       filter_DFT * np.fft.fft2(image[:, :, color_channel], filter_DFT.shape),
       filter_DFT.shape)).astype('float32')[0:image.shape[0], 0:image.shape[1]]
   return filtered_image
+
+
+def downsample(image, factor=2):
+  """
+  Downsample an image by the provided factor
+
+  Parameters
+  ----------
+  image : ndarray(float32 or uint8, size=(h, w, c))
+      The image to be filtered. The filter is applied to each color
+      channel independently.
+  factor : int, optional
+      Take every Nth sample in each dimension, where N==factor
+
+  Returns
+  -------
+  downsampled_image : ndarray(float32 or uint8, size=(h_d, w_d, c))
+      The size of the downsampled image is h_d = ceil(h / factor),
+      w_d = ceil(w / factor).
+  """
+  assert type(factor) == int
+  return image[::factor, ::factor]
+
+
+def get_binomial_filter_1d(size):
+  """
+  This produces a 1d spatial filter with binomial coefficients
+  """
+  assert size > 1
+  kernel = np.array([0.5, 0.5])
+  for i in range(size - 2):
+    kernel = convolve(np.array([0.5, 0.5]), kernel)
+  return kernel
+
+
+def get_binomial_filter_2d(height, width):
+  """
+  This produces a 2d binomial spatial filter (to use w/ filter_sd)
+  """
+  return (get_binomial_filter_1d(height)[:, None] *
+          get_binomial_filter_1d(width)[None, :])
+
+
+def get_gaussian_filter_2d(sigma, window_size, normalized=True):
+  """
+  Returns a 2d gaussian filter
+
+  Parameters
+  ----------
+  sigma : float
+      The standard deviation of the gaussian
+  window_size : tuple(int, int)
+      The size of the filter's window.
+  normalized : bool, optional
+      Make the filter elements sum to 1. Default True.
+
+  Returns
+  -------
+  gfilt : ndarray(float32, size=window_size)
+      A gaussian filter
+  """
+  lower_lim = [-int(np.floor((window_size[0]) / 2)),
+               -int(np.floor((window_size[1]) / 2))]
+  upper_lim = []
+  for i in range(2):
+    if window_size[i] % 2 != 0:  # prefer odd-sized window
+      upper_lim.append(int(np.floor(window_size[i] / 2)) + 1)
+    else:
+      upper_lim.append(int(np.floor(window_size[i] / 2)))
+
+  v_coords = np.arange(lower_lim[0], upper_lim[0])
+  h_coords = np.arange(lower_lim[1], upper_lim[1])
+  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
+  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) / (sigma**2))
+  if normalized:
+    return gaussian_kernel / np.sum(gaussian_kernel)
+  else:
+    return gaussian_kernel
 
 
 def get_low_pass_filter(DFT_num_samples, filter_parameters,
@@ -382,15 +480,8 @@ def local_contrast_normalization(image, filter_sigma, return_normalizer=False):
   filtered_image : ndarray(float32, size=(h, w, c))
   normalizer : ndarray(float32, size=(h, w, c)), if return_normalizer=True
   """
-  window_size = 2  # in terms of sigma. This gives the size of FIR filter
-  v_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
-                       int(np.ceil(window_size*filter_sigma))+1)
-  h_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
-                       int(np.ceil(window_size*filter_sigma))+1)
-  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
-  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) /
-                           (filter_sigma**2))
-  gaussian_kernel /= np.sum(gaussian_kernel)
+  gaussian_kernel = get_gaussian_filter_2d(
+      filter_sigma, (4*filter_sigma+1, 4*filter_sigma+1))
 
   local_variance = filter_sd(image**2, gaussian_kernel)
 
@@ -422,15 +513,8 @@ def local_luminance_subtraction(image, filter_sigma, return_subtractor=False):
   filtered_image : ndarray(float32, size=(h, w, c))
   subtractor : ndarray(float32, size=(h, w, c))
   """
-  window_size = 2  # in terms of sigma. This gives the size of FIR filter
-  v_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
-                       int(np.ceil(window_size*filter_sigma))+1)
-  h_coords = np.arange(-int(np.ceil(window_size*filter_sigma)),
-                       int(np.ceil(window_size*filter_sigma))+1)
-  kv_coords, kh_coords = np.meshgrid(v_coords, h_coords, indexing='ij')
-  gaussian_kernel = np.exp(-0.5*(kv_coords**2 + kh_coords**2) /
-                           (filter_sigma**2))
-  gaussian_kernel /= np.sum(gaussian_kernel)
+  gaussian_kernel = get_gaussian_filter_2d(
+      filter_sigma, (4*filter_sigma+1, 4*filter_sigma+1))
 
   local_luminance = filter_sd(image, gaussian_kernel)
 
