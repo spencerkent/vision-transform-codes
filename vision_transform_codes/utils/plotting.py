@@ -270,6 +270,8 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
           reshape_to_these_dims=reshaping, highlights=highlighting)
       t_ims = [t_im]
       labels_with_pix_coords = [lab_w_pix_coords]
+      non_slice_pairs, slice_pairs = get_dims_for_2d_slices_of_tensor(
+          topo_positions.ndim)
     else:
       # need to display by 2d 'slices' of the topography
       non_slice_pairs, slice_pairs = get_dims_for_2d_slices_of_tensor(
