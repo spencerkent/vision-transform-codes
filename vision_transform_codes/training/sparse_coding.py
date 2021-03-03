@@ -57,7 +57,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
         The number of times to cycle over the whole dataset, reshuffling the
         order of the patches.
       'code_inference_algorithm' : str
-        One of {'ista', 'fista', 'subspace_ista', 'subspace_fista'}
+        One of {'ista', 'fista', 'subspace_ista', 'subspace_fista',
+                'lsm_ista', 'lsm_fista'}
       'dictionary_update_algorithm' : str
         One of {'sc_steepest_descent', 'sc_cheap_quadratic_descent',
                 'subspace_sc_steepest_descent',
@@ -82,23 +83,31 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       ... IF 'code_inference_algorithm' or 'dictionary_update_algorithm' are
           prefixed by 'subspace' ...
       This means we're doing subspace variants of inference, learning, or (in
-      all likelihood) both. We need a couple additional parameters:
-      'group_assignments' : list(array_like)
-        Identifies a grouping of the dictionary elements--used by the
-        subspace inference and dictionary update algs. Our convention is the
-        following: Suppose we have
-          group_assignments = [[0, 2, 5], [1], [2, 3, 4, 5]]
-        This specifies three groups. group 0 is comprised of elements 0, 2,
-        and 5 from the dictioanary, group 1 is composed of element 1, and
-        group 2 is composed of elements 2, 3, 4, and 5. Notice that each group
-        can be of a different size and elements of the dictionary can
-        participate in multiple groups.
-      'subspace_alignment_penalty' : float
-        We impose a regularization penalty on the alignment of dictionary
-        elements that are part of the same group. Without this, dictionary
-        updates tend to produce some duplicated elements within a subgroup.
-        This is the lagrange multiplier beta, which weights this penalty in the
-        full loss function.
+      all likelihood) both. We need a couple additional parameters. We'll 
+      pass in with the 'subspace_parameters' dictionary:
+        'group_assignments' : list(array_like)
+          Identifies a grouping of the dictionary elements--used by the
+          subspace inference and dictionary update algs. Our convention is the
+          following: Suppose we have
+            group_assignments = [[0, 2, 5], [1], [2, 3, 4, 5]]
+          This specifies three groups. group 0 is comprised of elements 0, 2,
+          and 5 from the dictioanary, group 1 is composed of element 1, and
+          group 2 is composed of elements 2, 3, 4, and 5. Notice that each
+          group can be of a different size and elements of the dictionary can
+          participate in multiple groups.
+        'subspace_alignment_penalty' : float
+          We impose a regularization penalty on the alignment of dictionary
+          elements that are part of the same group. Without this, dictionary
+          updates tend to produce some duplicated elements within a subgroup.
+          This is the lagrange multiplier beta, which weights this penalty in
+          the full loss function.
+      ... IF 'code_inference_algorithm' prefixed by 'lsm' ...
+      This means we're doing the laplacian scale mixture variant of inference.
+      We need a couple additional parameters. We'll pass in with the 
+      'lsm_parameters' dictionary:
+        'beta' : float, 'update_interval' : int, 'lsm_scale_var_structure' : str
+        'lsm_scale_struct_params' : dictionary
+          See ../analysis_transforms/*/lsm_reweighted_ista_fista
       --- OPTIONAL ---
       'nonnegative_only' : bool, optional
         Make the codes strictly nonnegative. Default False.
@@ -121,7 +130,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   #######################
   # I realize there's a fair amount of variable scope flying around here, but
   # for now I think this is the best way to limit the verbosity of the trainer
-  def infer_codes(batch_images):
+  def infer_codes(batch_images, validation=False):
     """Infers sparse codes for a batch of images"""
     inf_alg_inputs = {
         'dictionary': dictionary, 'sparsity_weight': sparsity_weight,
@@ -136,6 +145,14 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       inf_alg_inputs.update({'group_assignments': group_assignments})
       inf_alg_inputs.pop('nonnegative_only')  # these vers. always nonnegative
       inf_alg_inputs['variant'] = inf_alg_inputs['variant'][9:]  # prefixed
+    if code_inf_alg in ['lsm_ista', 'lsm_fista']:
+      inf_alg_inputs.update({'beta_param': lsm_beta})
+      inf_alg_inputs.update({'update_rate_vars_every': lsm_update_interval})
+      inf_alg_inputs.update({'rate_var_structure': lsm_rate_var_structure})
+      inf_alg_inputs.update({'structure_params': lsm_rate_struct_params})
+      inf_alg_inputs['variant'] = inf_alg_inputs['variant'][4:]  # prefixed
+      if validation:
+        inf_alg_inputs.update({'return_rate_variables': True})
     batch_codes = inference_alg.run(**inf_alg_inputs)
     return batch_codes
 
@@ -174,7 +191,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     # with the results without needing PyTorch.
     pickle.dump(dictionary.cpu().numpy(), open(where_to_save, 'wb'))
 
-  def compute_metrics(batch_images, batch_codes):
+  def compute_metrics(batch_images, batch_codes, other=None):
     """These metrics can be used to assess how training is progressing"""
     metrics = {}
     batch_images_np = batch_images.cpu().numpy()
@@ -205,6 +222,11 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
           sparsity_weight * sum_of_group_norms)
       # for now I won't include the alignment regularization because it's
       # a little involved to compute, but it could be added later.
+    elif code_inf_alg in ['lsm_ista', 'lsm_fista']:
+      metrics['Average LASSO lagrange component'] = np.mean(sparsity_weight *
+          torch.norm(other * batch_codes, p=1,
+                     dim=axes_of_summation).cpu().numpy())
+          #^ other will be the rate variables that normalize the codes
     else:
       metrics['Average LASSO lagrange component'] = np.mean(sparsity_weight *
           torch.norm(batch_codes, p=1, dim=axes_of_summation).cpu().numpy())
@@ -241,7 +263,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     # There's probably a more elegant way to do this, but it works for now...
     tiled_kernel_figs = display_dictionary(
         dictionary.cpu().numpy(), reshaping=kernel_reshaping,
-        groupings=group_assignments, renormalize=True,
+        special_tiling=dict_viz_tiling_params, renormalize=True,
         plot_title='Current dictionary (renormalized), iter{}'.format(
           total_iter_idx))
     for fig_idx in range(len(tiled_kernel_figs)):
@@ -251,7 +273,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     del tiled_kernel_figs
     tiled_kernel_figs = display_dictionary(
         dictionary.cpu().numpy(), reshaping=kernel_reshaping,
-        groupings=group_assignments, renormalize=False,
+        special_tiling=dict_viz_tiling_params, renormalize=False,
         plot_title='Current dictionary (no renorm), iter {}'.format(
           total_iter_idx))
     for fig_idx in range(len(tiled_kernel_figs)):
@@ -287,7 +309,8 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   dict_update_alg = all_params['dictionary_update_algorithm']
   dict_update_param_schedule = all_params['dict_update_param_schedule']
   assert coding_mode in ['fully-connected', 'convolutional']
-  assert code_inf_alg in ['ista', 'fista', 'subspace_ista', 'subspace_fista']
+  assert code_inf_alg in ['ista', 'fista', 'subspace_ista', 'subspace_fista',
+                          'lsm_ista', 'lsm_fista']
   assert dict_update_alg in ['sc_steepest_descent',
                              'sc_cheap_quadratic_descent',
                              'subspace_sc_steepest_descent',
@@ -296,7 +319,72 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     kernel_strides = all_params['strides']
     image_padding = all_params['padding']
     assert image_padding != ((0, 0), (0, 0)), 'Please use None instead'
-  ### OPTIONAL ###
+
+  if code_inf_alg in ['ista', 'fista']:
+    if coding_mode == 'fully-connected':
+      from analysis_transforms.fully_connected import (
+          ista_fista as inference_alg)
+    else:
+      from analysis_transforms.convolutional import (
+          ista_fista as inference_alg)
+  elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
+    group_assignments = all_params['subspace_parameters']['group_assignments']
+    if coding_mode == 'fully-connected':
+      from analysis_transforms.fully_connected import (
+          subspace_ista_fista as inference_alg)
+    else:
+      raise KeyError('Havent implemented subspace ISTA for convolutional yet')
+  elif code_inf_alg in ['lsm_ista', 'lsm_fista']:
+    if coding_mode == 'fully-connected':
+      from analysis_transforms.fully_connected import (
+          lsm_reweighted_ista_fista as inference_alg)
+    else:
+      raise KeyError('Havent implemented LSM for convolutional yet')
+    lsm_beta = all_params['lsm_parameters']['beta']
+    lsm_update_interval = all_params['lsm_parameters']['update_interval']
+    lsm_rate_var_structure = all_params['lsm_parameters'][
+        'lsm_rate_var_structure']
+    lsm_rate_struct_params = all_params['lsm_parameters'][
+        'lsm_rate_struct_params']
+  else:
+    raise KeyError('Unrecognized code inference algorithm: ' + code_inf_alg)
+
+  if dict_update_alg == 'sc_steepest_descent':
+    if coding_mode == 'fully-connected':
+      from dict_update_rules.fully_connected import (
+          sc_steepest_descent as dict_update)
+    else:
+      from dict_update_rules.convolutional import (
+          sc_steepest_descent as dict_update)
+  elif dict_update_alg == 'sc_cheap_quadratic_descent':
+    if coding_mode == 'fully-connected':
+      from dict_update_rules.fully_connected import (
+          sc_cheap_quadratic_descent as dict_update)
+    else:
+      from dict_update_rules.convolutional import (
+          sc_cheap_quadratic_descent as dict_update)
+    hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
+  elif dict_update_alg == 'subspace_sc_steepest_descent':
+    if coding_mode == 'fully-connected':
+      from dict_update_rules.fully_connected import (
+          subspace_sc_steepest_descent as dict_update)
+    else:
+      raise KeyError('Not implemented for convolutional')
+    subspace_alignment_penalty = all_params['subspace_parameters'][
+        'subspace_alignment_penalty']
+  elif dict_update_alg == 'subspace_sc_cheap_quadratic_descent':
+    if coding_mode == 'fully-connected':
+      from dict_update_rules.fully_connected import (
+          subspace_sc_cheap_quadratic_descent as dict_update)
+    else:
+      raise KeyError('Not implemented for convolutional')
+    subspace_alignment_penalty = all_params['subspace_parameters'][
+        'subspace_alignment_penalty']
+    hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
+  else:
+    raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
+
+  ### MISC OPTIONAL ###
   if 'nonnegative_only' in all_params:
     nonneg_only = all_params['nonnegative_only']
   else:
@@ -305,10 +393,9 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
     hard_threshold = all_params['hard_threshold']
   else:
     hard_threshold = False
-  if 'group_assignments' in all_params:
+  if 'subspace_parameters' in all_params:
     # specify each group's members once, no duplicates
-    assert all([len(set(x)) == len(x) for x in all_params['group_assignments']])
-    group_assignments = all_params['group_assignments']
+    assert all([len(set(x)) == len(x) for x in group_assignments])
     if type(group_assignments[0]) != list:
       # yaml serialization of numpy arrays doesn't work well, so we'll make
       # sure it's a list, just in case.
@@ -359,6 +446,23 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       kernel_reshaping = all_params['reshaped_kernel_size']
     else:
       kernel_reshaping = None
+    if code_inf_alg in ['subspace_ista', 'subspace_fista']:
+      dict_viz_tiling_params = {'type': 'disjoint_groups',
+                                'params': {'groups': group_assignments}}
+    elif code_inf_alg in ['lsm_ista', 'lsm_fista']:
+      if lsm_rate_var_structure == 'disjoint_groups':
+        dict_viz_tiling_params = {'type': 'disjoint_groups',
+                                  'params': {'groups':
+                                    lsm_rate_struct_params['groups']}}
+      elif lsm_rate_var_structure == 'topographic':
+        dict_viz_tiling_params = {'type': 'topographic',
+            'params': {'topography_positions': np.arange(
+              init_dictionary.size(0)).reshape(
+                lsm_rate_struct_params['coeff_topo_shape'])}}
+      else:
+        dict_viz_tiling_params = None
+    else:
+      dict_viz_tiling_params = None
   else:
     trn_vis_sched = None
   if ckpt_sched is not None or trn_vis_sched is not None:
@@ -386,57 +490,6 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
   else:
     dict_element_rp_schedule = None
 
-  if code_inf_alg in ['ista', 'fista']:
-    if coding_mode == 'fully-connected':
-      from analysis_transforms.fully_connected import (
-          ista_fista as inference_alg)
-    else:
-      from analysis_transforms.convolutional import (
-          ista_fista as inference_alg)
-  elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
-    assert group_assignments is not None
-    if coding_mode == 'fully-connected':
-      from analysis_transforms.fully_connected import (
-          subspace_ista_fista as inference_alg)
-    else:
-      raise KeyError('Havent implemented subspace ISTA for convolutional yet')
-  else:
-    raise KeyError('Unrecognized code inference algorithm: ' + code_inf_alg)
-
-  if dict_update_alg == 'sc_steepest_descent':
-    if coding_mode == 'fully-connected':
-      from dict_update_rules.fully_connected import (
-          sc_steepest_descent as dict_update)
-    else:
-      from dict_update_rules.convolutional import (
-          sc_steepest_descent as dict_update)
-  elif dict_update_alg == 'sc_cheap_quadratic_descent':
-    if coding_mode == 'fully-connected':
-      from dict_update_rules.fully_connected import (
-          sc_cheap_quadratic_descent as dict_update)
-    else:
-      from dict_update_rules.convolutional import (
-          sc_cheap_quadratic_descent as dict_update)
-    hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
-  elif dict_update_alg == 'subspace_sc_steepest_descent':
-    if coding_mode == 'fully-connected':
-      from dict_update_rules.fully_connected import (
-          subspace_sc_steepest_descent as dict_update)
-    else:
-      raise KeyError('Not implemented for convolutional')
-    group_assignments = all_params['group_assignments']
-    subspace_alignment_penalty = all_params['subspace_alignment_penalty']
-  elif dict_update_alg == 'subspace_sc_cheap_quadratic_descent':
-    if coding_mode == 'fully-connected':
-      from dict_update_rules.fully_connected import (
-          subspace_sc_cheap_quadratic_descent as dict_update)
-    else:
-      raise KeyError('Not implemented for convolutional')
-    group_assignments = all_params['group_assignments']
-    subspace_alignment_penalty = all_params['subspace_alignment_penalty']
-    hessian_diag = init_dictionary.new_zeros(init_dictionary.shape[0])
-  else:
-    raise KeyError('Unrecognized dict update algorithm: ' + dict_update_alg)
   ##################################
   # Done w/ setup and error checking
   ##################################
@@ -500,8 +553,13 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
         for v_batch_images in validation_image_dataset:
           if dictionary.device != v_batch_images.device:
             v_batch_images = v_batch_images.to(dictionary.device)
-          v_codes = infer_codes(v_batch_images)
-          val_metrics.append(compute_metrics(v_batch_images, v_codes))
+          if code_inf_alg in ['lsm_ista', 'lsm_fista']:
+            v_codes, v_rate_vars, _ = infer_codes(v_batch_images, True)
+            val_metrics.append(compute_metrics(v_batch_images, v_codes,
+                                               other=v_rate_vars))
+          else:
+            v_codes = infer_codes(v_batch_images)
+            val_metrics.append(compute_metrics(v_batch_images, v_codes))
         send_metrics_to_tensorboard({x: np.mean([val_metrics[y][x]
           for y in range(len(val_metrics))]) for x in val_metrics[0]})
         send_dict_viz_to_tensorboard()
@@ -631,7 +689,7 @@ def reset_or_prune_dict_elements(dictionary, codes, filter_type,
           cos_sims = (torch.mm(dictionary[groups[g_idx]],
                                dictionary[groups[g_idx]].t()) /
                       torch.mm(norms, norms.t())).cpu().numpy()
-          problem_pairs = np.argwhere(np.abs(np.triu(cos_sims, k=1)) > 
+          problem_pairs = np.argwhere(np.abs(np.triu(cos_sims, k=1)) >
                                       csim_threshold)
           temp_mt = []
           for pair in problem_pairs:

@@ -173,7 +173,10 @@ def display_dictionary(dictionary, renormalize=False, reshaping=None,
     for g_idx in range(len(groups)):
       if len(groups[g_idx]) < 9:
         # Just make it a 1d tile
-        tp_inds = groups[g_idx][None, :]
+        if type(groups[g_idx]) == list:
+          tp_inds = np.array([groups[g_idx]])
+        else:
+          tp_inds = groups[g_idx][None, :]
       else:
         # make it approximately square
         squares = [x**2 for x in range(1, int(np.sqrt(len(groups[g_idx])))+2)]
