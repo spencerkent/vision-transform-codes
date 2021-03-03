@@ -11,7 +11,8 @@ dataset_directory = Path('/media/expansion1/spencerkent/Datasets')
 raw_data_filepaths = {
     'Field_NW': dataset_directory / 'Field_natural_images/unwhitened.mat',
     'vanHateren': dataset_directory / 'vanHaterenNaturalScenes/curated_by_dylan_paiton.h5',
-    'Kodak_BW': dataset_directory / 'Kodak/kodak_full_images_training.p'}
+    'Kodak_BW': dataset_directory / 'Kodak/generated_views/train/Grey.p',
+    'Kodak_RGB': dataset_directory / 'Kodak/generated_views/train/RGB.p'}
 
 # just useful for sampling a gabor without having to specify all the parameters
 gabor_params = {'patch_size': (16, 16), 'gabor_parameters': {
