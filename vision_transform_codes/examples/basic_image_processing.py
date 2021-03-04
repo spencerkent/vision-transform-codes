@@ -19,7 +19,7 @@ def main():
 
   if WHICH_DEMO_IMAGES == 'Kodak_BW':
     raw_data_filepath = \
-        '/home/spencerkent/Datasets/Kodak/kodak_full_images_training.p'
+        '/home/spencerkent/Datasets/Kodak/generated_views/train/Grey.p'
     unprocessed_images = pickle.load(open(raw_data_filepath, 'rb'))
     unprocessed_images = [x.astype('float32') for x in unprocessed_images]
   else:
