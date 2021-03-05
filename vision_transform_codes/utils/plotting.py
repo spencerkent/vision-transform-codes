@@ -17,9 +17,12 @@ from matplotlib import pyplot as plt
 from matplotlib.image import NonUniformImage
 import matplotlib.gridspec as gridspec
 from matplotlib.ticker import FormatStrFormatter, StrMethodFormatter
+from matplotlib import animation
 
 tab10colors = plt.get_cmap('tab10').colors
 blue_red = plt.get_cmap('RdBu_r')
+magma = plt.get_cmap('magma')
+gray = plt.get_cmap('gray')
 
 
 def display_dictionary(dictionary, renormalize=False, reshaping=None,
@@ -563,6 +566,231 @@ def display_codes(codes, indv_stem_plots=True, input_and_recon=None,
   return code_figs
 
 
+def display_codes_topographic(codes, associated_dict, dict_display_params,
+    coeff_topography=None, hierarchical_scale_vars=None,
+    scale_vars_topography=None, make_animation=True, animation_params=None):
+  """
+  Used for visualizing codes when we expect they have a particular ordering
+
+  Especially when we do topographic sparse, coding we want to see how the
+  encodings cluster in certain parts of the topography--this function helps
+  with such visualization.
+
+  Parameters
+  ----------
+  codes : ndarray(float32, size=(b, s))
+      The batch of codes to visualize. Currently only works for
+      fully-connected codes.
+  associated_dict : ndarray(float32, size=(s, n) OR (s, c, kh, kw))
+      If the size of dictionary is (s, n), this is a 'fully-connected'
+      dictionary where each basis element has the same dimensionality as the
+      image it is trying to represent. n is the size of the image and s the
+      number of basis functions. If the size of dictionary is (s, c, kh, kw),
+      this is a 'convolutional' dictionary where each basis element is
+      (potentially much) smaller than the image it is trying to represent. c
+      is the number of channels that in the input space, kh is the dictionary
+      kernel height, and kw is the dictionary kernel width.
+  dict_display_params : dictionary
+      See display_dictionary() and get_dict_tile_1d_or_2d()
+  coeff_topography : ndarray, optional
+      A specific topography to impose on the coefficients and dictionary. See
+      display_dictionary() and, namely the topographi special_tiling parameter.
+      Otherwise arangement is a simple unordered raster.
+  hierarchical_scale_vars : ndarray(float32, size=(b, l))
+      These are variables that capture the scale of the codes, where l <= s.
+      These can be returned from the lsm_reweighted_ista_fista analysis
+      transform. If these are provided, it may be more informative to use these
+      to normalize the codes (making their prior a unit laplacian) and
+      pass normalized codes into this function. Default None.
+  scale_vars_topography : ndarray, optional
+      A specific topography to impose on the hierarchical scale variables.
+      Otherwise, just a simple raster.
+  make_animation : bool, optional
+      Spit out an mp4 animation of all the samples in sequence. Otherwise
+      each sample gets it's own standalone fig. Default True.
+  animation_params : dict, optional
+      Additional tweaks of the animation:
+      'length_in_seconds' : float
+        The length of the animation, irrespective of the number of samples.
+
+  Returns
+  -------
+  If make_animation == True:
+    anim_return : dictionary
+      'anim_object' : matplotlib.animation.FuncAnimation
+        Animation of the codes. Can be saved via
+        self.save(FNAME, writer=WRITER) where WRITER is any animation writer.
+      'frame_rate' : float
+        The frame rate that this animation is meant to be viewed at.
+  Else:
+    fig_list : list(pyplot.Figure)
+      This is each individual sample as its own figure
+  """
+  if not dict_display_params['renormalize']:
+    associated_dict, dviz_mapping = standardize_for_imshow(associated_dict)
+  else:
+    dviz_mapping = None
+
+  if coeff_topography is None:
+    # create a simple raster, like we do in display_dictionary
+    squares = [x**2 for x in range(1, int(np.sqrt(associated_dict.shape[0]))+2)]
+    tile_num_cols = int(np.sqrt(
+      squares[bisect.bisect_left(squares, associated_dict.shape[0])]))
+    tp_inds = np.array([None]*(tile_num_cols**2))
+    tp_inds[:associated_dict.shape[0]] = np.arange(associated_dict.shape[0])
+    tp_inds = tp_inds.reshape((tile_num_cols, tile_num_cols))
+  else:
+    tp_inds = coeff_topography
+
+  dict_viz, _ = get_dict_tile_1d_or_2d(
+      associated_dict, tile_positions=tp_inds,
+      indv_renorm=dict_display_params['renormalize'],
+      reshape_to_these_dims=dict_display_params['reshaping'])
+  if associated_dict.ndim == 2:
+    targ_tile_dims = (3,) + dict_display_params['reshaping']
+  else:
+    targ_tile_dims = associated_dict.shape[1:]
+
+  normalized_codes, code_mapping = standardize_for_imshow(codes)
+  # ^indexes into the blue_red color map
+
+  if hierarchical_scale_vars is not None:
+    max_hsv = np.max(hierarchical_scale_vars)
+    min_hsv = 0.0
+    h_scale_vars_normalized = hierarchical_scale_vars / max_hsv
+    #^ indexes into the magma color map
+    if scale_vars_topography is None:
+      # do another simple raster of the scale variables
+      squares = [x**2 for x in range(1, int(np.sqrt(
+        hierarchical_scale_vars.shape[1]))+2)]
+      tile_num_cols = int(np.sqrt(
+        squares[bisect.bisect_left(squares, hierarchical_scale_vars.shape[1])]))
+      htp_inds = np.array([None]*(tile_num_cols**2))
+      htp_inds[:hierarchical_scale_vars.shape[1]] = np.arange(
+          hierarchical_scale_vars.shape[1])
+      htp_inds = htp_inds.reshape((tile_num_cols, tile_num_cols))
+    else:
+      htp_inds = scale_vars_topography
+
+  frames_nc_tiles = []
+  if hierarchical_scale_vars is not None:
+    frames_hs_tiles = []
+
+  for sample_idx in range(codes.shape[0]):
+    # a tiling of the normalized code values
+    nc_tiles = np.ones((associated_dict.shape[0],) +
+                        targ_tile_dims)
+    for idx in range(codes.shape[1]):
+      nc_tiles[idx] *= np.array(blue_red(normalized_codes[
+        sample_idx][idx]))[:3][:, None, None]
+    nc_tile_viz, _, = get_dict_tile_1d_or_2d(
+        nc_tiles, tile_positions=tp_inds)
+    frames_nc_tiles.append(nc_tile_viz)
+
+    if hierarchical_scale_vars is not None:
+      # left-most subplot is a tiling of hierarchical scale variables
+      hs_tiles = np.ones((hierarchical_scale_vars.shape[1],) +
+                          targ_tile_dims)
+      for idx in range(hierarchical_scale_vars.shape[1]):
+        hs_tiles[idx] *= np.array(magma(h_scale_vars_normalized[
+          sample_idx][idx]))[:3][:, None, None]
+      hs_tile_viz, _, = get_dict_tile_1d_or_2d(
+          hs_tiles, tile_positions=htp_inds)
+      frames_hs_tiles.append(hs_tile_viz)
+
+  if make_animation:
+    assert animation_params is not None
+    video_fps = codes.shape[0] / animation_params['length_in_seconds']
+    frame_interval = 1000 / video_fps
+
+    fig = plt.figure(figsize=(12, 8))
+
+    # helper funtion for animation
+    def func_anim_update(frame):
+      nc_img.set_array(frames_nc_tiles[frame])
+      if hierarchical_scale_vars is not None:
+        hs_img.set_array(frames_hs_tiles[frame])
+        return hs_img, nc_img,
+      else:
+        return nc_img,
+
+    if hierarchical_scale_vars is not None:
+      hs_ax = plt.subplot(1, 3, 1)
+      nc_ax = plt.subplot(1, 3, 2)
+      d_ax = plt.subplot(1, 3, 3)
+
+      hs_img = hs_ax.imshow(frames_hs_tiles[sample_idx], interpolation='None')
+      hs_ax.axis('off')
+    else:
+      nc_ax = plt.subplot(1, 2, 1)
+      d_ax = plt.subplot(1, 2, 2)
+
+    # the middle subplot are the code values
+    nc_img = nc_ax.imshow(frames_nc_tiles[sample_idx], interpolation='None')
+    nc_ax.axis('off')
+
+    d_img = d_ax.imshow(dict_viz, interpolation='None')
+    d_ax.axis('off')
+
+    if hierarchical_scale_vars is not None:
+      plt.tight_layout(w_pad=5, rect=(0, 0, 0.97, 1))
+      draw_colorbar([0.0, max_hsv/2, max_hsv], magma,
+                    [0.29, 0.45, 0.005, 0.1])
+      draw_colorbar(code_mapping, blue_red, [0.625, 0.45, 0.005, 0.1])
+      if dviz_mapping is not None:
+        draw_colorbar(dviz_mapping, gray, [0.96, 0.45, 0.005, 0.1])
+    else:
+      plt.tight_layout(w_pad=5, rect=(0, 0, 0.97, 1))
+      draw_colorbar(code_mapping, blue_red, [0.455, 0.45, 0.005, 0.1])
+      if dviz_mapping is not None:
+        draw_colorbar(dviz_mapping, gray, [0.96, 0.45, 0.005, 0.1])
+
+    return {'anim_object': animation.FuncAnimation(fig, func_anim_update,
+              interval=frame_interval, frames=codes.shape[0], blit=True),
+            'frame_rate': video_fps}
+
+  else:
+    # spit out as separate plots
+    all_figs = []
+    for sample_idx in range(codes.shape[0]):
+      fig = plt.figure(figsize=(12, 8))
+
+      if hierarchical_scale_vars is not None:
+        hs_ax = plt.subplot(1, 3, 1)
+        nc_ax = plt.subplot(1, 3, 2)
+        d_ax = plt.subplot(1, 3, 3)
+
+        hs_ax.imshow(frames_hs_tiles[sample_idx], interpolation='None')
+        hs_ax.axis('off')
+      else:
+        nc_ax = plt.subplot(1, 2, 1)
+        d_ax = plt.subplot(1, 2, 2)
+
+      # the middle subplot are the code values
+      nc_ax.imshow(frames_nc_tiles[sample_idx], interpolation='None')
+      nc_ax.axis('off')
+
+      d_ax.imshow(dict_viz, interpolation='None')
+      d_ax.axis('off')
+
+      if hierarchical_scale_vars is not None:
+        plt.tight_layout(w_pad=5, rect=(0, 0, 0.97, 1))
+        draw_colorbar([0.0, max_hsv/2, max_hsv], magma,
+                      [0.29, 0.45, 0.005, 0.1])
+        draw_colorbar(code_mapping, blue_red, [0.625, 0.45, 0.005, 0.1])
+        if dviz_mapping is not None:
+          draw_colorbar(dviz_mapping, gray, [0.96, 0.45, 0.005, 0.1])
+      else:
+        plt.tight_layout(w_pad=5, rect=(0, 0, 0.97, 1))
+        draw_colorbar(code_mapping, blue_red, [0.455, 0.45, 0.005, 0.1])
+        if dviz_mapping is not None:
+          draw_colorbar(dviz_mapping, gray, [0.96, 0.45, 0.005, 0.1])
+
+      all_figs.append(fig)
+
+    return all_figs
+
+
 def display_code_marginal_densities(codes, num_hist_bins, log_prob=False,
     ignore_vals=[], lines=True, overlaid=False, plot_title=""):
   """
@@ -858,11 +1086,6 @@ def get_dict_tile_1d_or_2d(dictionary, tile_positions=None,
   """
   assert dictionary.ndim in [2, 4]
   assert tile_positions.ndim in [1, 2]
-  if not indv_renorm:
-    if np.max(dictionary) != 1.0 and np.min(dictionary) != 0.0:
-      raise RuntimeError('To insure consistent luminance interpretation, ' +
-                         'please standardize whole dictionary for imshow ' +
-                         'before passing to this tiling function')
   if tile_positions.ndim == 1:
     tile_shape = (1,) + tile_positions.shape  # horizontal tile
     tp = tile_positions[None, :]
@@ -1048,9 +1271,10 @@ def standardize_for_imshow(image):
   return standardized_image, raw_val_mapping
 
 
-def draw_colorbar(imshow_to_raw):
+def draw_colorbar(imshow_to_raw, colormap=gray,
+                  position_and_sz=[0.945, 0.4, 0.01, 0.2]):
   """
-  Adds a luminance colorbar
+  Adds a colorbar
 
   Because there isn't good rgb colorbar support in pyplot I hack this by
   adding another image subplot.
@@ -1058,12 +1282,21 @@ def draw_colorbar(imshow_to_raw):
   Parameters
   ----------
   imshow_to_raw : tuple(float, float, float)
-      Indicates what raw values are represented by 0.0, 0.5, and 1.0. Usually
-      produced by the standardize_for_imshow() function above.
+      Indicates what raw values are represented by 0.0, 0.5, and 1.0 with
+      respect to the colormap. Usually produced by the
+      standardize_for_imshow() function above.
+  colormap : matplotlib.colors.LinearSegmentedColormap, optional
+      A colormap we use to display values in the interval [0, 1]. By default
+      use the gray colormap, so 0 is black, 1 is white.
+  position_and_sz : array-like(float, float, float, float), optional
+      The position and size of the colorbar. Uses the pyplot axes position
+      convention ([horz_pos, vert_pos, width, height]). By default, place this
+      in a position that's good for typical display_dictionary figures.
   """
-  cbar_ax = plt.axes([0.945, 0.4, 0.01, 0.2])
-  gradient = np.linspace(1.0, 0.0, 256)[:, None]
-  cbar_ax.imshow(gradient, cmap='gray')
+  cbar_ax = plt.axes(position_and_sz)
+  colors = np.array([
+    colormap(x) for x in np.linspace(1.0, 0.0, 256)])[:, None, :]
+  cbar_ax.imshow(colors)
   cbar_ax.set_aspect('auto')
   cbar_ax.yaxis.tick_right()
   cbar_ax.xaxis.set_ticks([])
