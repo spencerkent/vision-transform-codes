@@ -29,14 +29,20 @@ pre_dict = torch.zeros_like(sparse_coding_dictionary).copy_(
 
 g_assignments = np.array_split(np.arange(256), 256//4)
 
+# really simple connectivity matrix
+conn_mat = np.zeros([256, 256//4], dtype='float32')
+for g_idx in range(256//4):
+  conn_mat[g_assignments[g_idx], g_idx] = 1
+conn_mat_torch = torch.from_numpy(conn_mat).to(torch_device)
+
 # most vanilla
 ista_codes = subspace_ista_fista.run(imgs, sparse_coding_dictionary,
-      g_assignments, 0.01, 100, variant='ista')
+      conn_mat_torch, 0.01, 100, variant='ista')
 fista_codes = subspace_ista_fista.run(imgs, sparse_coding_dictionary,
-      g_assignments, 0.01, 100, variant='fista')
+      conn_mat_torch, 0.01, 100, variant='fista')
 # add an early stopping criterion
 ista_codes = subspace_ista_fista.run(imgs, sparse_coding_dictionary,
-      g_assignments, 0.01, 100, variant='ista',
+      conn_mat_torch, 0.01, 100, variant='ista',
       early_stopping_epsilon=1e-3)
 assert torch.allclose(imgs, pre_imgs)
 assert torch.allclose(sparse_coding_dictionary, pre_dict)
@@ -44,7 +50,7 @@ assert torch.allclose(sparse_coding_dictionary, pre_dict)
 pre_ista_codes = torch.zeros_like(ista_codes).copy_(ista_codes)
 # apply these to existing codes
 new_ista_codes = subspace_ista_fista.run(imgs, sparse_coding_dictionary,
-    g_assignments, 0.01, 100, variant='ista', initial_codes=ista_codes)
+    conn_mat_torch, 0.01, 100, variant='ista', initial_codes=ista_codes)
 
 assert torch.allclose(ista_codes, pre_ista_codes) # dont mutate initial_codes
 assert not torch.allclose(new_ista_codes, pre_ista_codes)

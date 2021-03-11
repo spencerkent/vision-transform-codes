@@ -83,7 +83,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       ... IF 'code_inference_algorithm' or 'dictionary_update_algorithm' are
           prefixed by 'subspace' ...
       This means we're doing subspace variants of inference, learning, or (in
-      all likelihood) both. We need a couple additional parameters. We'll 
+      all likelihood) both. We need a couple additional parameters. We'll
       pass in with the 'subspace_parameters' dictionary:
         'group_assignments' : list(array_like)
           Identifies a grouping of the dictionary elements--used by the
@@ -101,9 +101,11 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
           updates tend to produce some duplicated elements within a subgroup.
           This is the lagrange multiplier beta, which weights this penalty in
           the full loss function.
+        'connectivity_matrix' : torch.tensor(float32, size=(s, g))
+          The matrix giving group connectivity (see subspace_ista_fista.run()).
       ... IF 'code_inference_algorithm' prefixed by 'lsm' ...
       This means we're doing the laplacian scale mixture variant of inference.
-      We need a couple additional parameters. We'll pass in with the 
+      We need a couple additional parameters. We'll pass in with the
       'lsm_parameters' dictionary:
         'beta' : float, 'update_interval' : int, 'lsm_scale_var_structure' : str
         'lsm_scale_struct_params' : dictionary
@@ -142,8 +144,9 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
       inf_alg_inputs.update({'images_padded': batch_images,
         'kernel_stride': kernel_strides, 'padding_dims': image_padding})
     if code_inf_alg in ['subspace_ista', 'subspace_fista']:
-      inf_alg_inputs.update({'group_assignments': group_assignments})
+      inf_alg_inputs.update({'connectivity_matrix': connectivity_matrix})
       inf_alg_inputs.pop('nonnegative_only')  # these vers. always nonnegative
+      inf_alg_inputs.pop('hard_threshold')  # these vers. always nonnegative
       inf_alg_inputs['variant'] = inf_alg_inputs['variant'][9:]  # prefixed
     if code_inf_alg in ['lsm_ista', 'lsm_fista']:
       inf_alg_inputs.update({'beta_param': lsm_beta})
@@ -329,6 +332,7 @@ def train_dictionary(training_image_dataset, validation_image_dataset,
           ista_fista as inference_alg)
   elif code_inf_alg in ['subspace_ista', 'subspace_fista']:
     group_assignments = all_params['subspace_parameters']['group_assignments']
+    connectivity_matrix = all_params['subspace_parameters']['connectivity_matrix']
     if coding_mode == 'fully-connected':
       from analysis_transforms.fully_connected import (
           subspace_ista_fista as inference_alg)
